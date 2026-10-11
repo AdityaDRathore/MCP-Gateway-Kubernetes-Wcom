@@ -57,11 +57,13 @@ flowchart TD
 
 ### D1 — Application Stack & Monorepo Structure
 - **Language**: TypeScript across all services for end-to-end type safety and shared interfaces.
-- **Runtime**: Pinned **Node.js 20 LTS (`v20.20.2`)** via `.nvmrc` and package engines.
+- **Runtime**: Pinned **Node.js 24 LTS (`v24.20.0`)** via `.nvmrc` and root `package.json` `engines`.
+  > [!NOTE]
+  > Node.js 20 reached official End-of-Life (EOL) in April 2026. Node.js 24 is the active Long Term Support (LTS) line in October 2026. The MCP SDK (`@modelcontextprotocol/sdk@1.32.1`) and TypeScript toolchain build and pass all automated tests cleanly on Node 24.
 - **Package Manager**: npm workspaces (`apps/dashboard`, `apps/gateway`, `apps/mcp-woocommerce`, `apps/mcp-crm`, `apps/mcp-tasks`, `packages/shared`).
 - **Monorepo Layout**:
   ```
-  urumi-gateway/
+  urumi-platform/
   ├── apps/
   │   ├── dashboard/          # React + Vite admin dashboard & chat UI
   │   ├── gateway/            # Express + TypeScript gateway proxy & control plane
@@ -71,38 +73,59 @@ flowchart TD
   ├── packages/
   │   └── shared/             # Shared TypeScript types (audit logs, tool schemas)
   ├── infra/
-  │   └── helm/               # Unified Helm chart with values-local and values-prod
-  ├── docs/                   # ADRs, audit, and design notes
-  ├── spikes/                 # Protocol validation spikes
+  │   └── helm/
+  │       └── urumi-platform/ # Unified Helm chart with values-local and values-prod
+  ├── docs/                   # ADRs, requirements traceability, and phase reports
+  ├── spikes/                 # Protocol validation spikes (spikes/mcp-echo)
   └── package.json            # npm workspaces root
   ```
 
-### D2 — Data Persistence & Memory Optimization
+### D2 — Data Persistence & Storage Failure Model
 - **WooCommerce Store**: MariaDB 11.x with standard Kubernetes PersistentVolumeClaim (`storageClassName: local-path`).
 - **Gateway Persistence**: **SQLite with Write-Ahead Logging (WAL) mounted on a PersistentVolumeClaim (`/data/gateway.db`)**.
   - **Trade-off Analysis vs PostgreSQL**:
     - *PostgreSQL*: Consumes an additional ~120–180 MiB of idle RAM and requires another stateful deployment in the cluster.
-    - *SQLite with WAL*: Operates in-process with <15 MiB RAM overhead, provides ACID transactional integrity, handles hundreds of writes/sec (well above gateway needs), and guarantees 100% durability across pod restarts via the PVC mount.
-    - *Verdict*: Given the host's 7.6 GiB total RAM (~1.4 GiB available), SQLite on PVC is the superior, resource-prudent design that prevents host out-of-memory crashes while fully satisfying data durability requirements.
+    - *SQLite with WAL*: Operates in-process with <15 MiB RAM overhead, provides ACID transactional integrity, and handles hundreds of writes/sec (well above gateway needs).
+  - **Realistic Failure Model**:
+    - *Pod Crashes & Restarts*: Fully protected. The PersistentVolume preserves database files across container crashes, node evictions, and deployment rollouts.
+    - *Concurrent Read/Write*: WAL mode allows concurrent readers and single writer without lock contention.
+    - *Host / Disk Failure*: Standard local-path PVCs do not protect against physical host disk destruction. For enterprise disaster recovery, database snapshotting or continuous WAL replication (e.g. Litestream to object storage) is required.
 
 ### D3 — Service Boundaries & Network Isolation
 - **Public Surface**: Only the Storefront (`shop.127.0.0.1.nip.io:8080`) and the Dashboard/Gateway endpoint (`dashboard.127.0.0.1.nip.io:8080`) are exposed via Kubernetes Ingress.
 - **Private Surface**:
-  - `mcp-woocommerce`, `mcp-crm`, and `mcp-tasks` are strictly `ClusterIP` services. They have **no Ingress rules** and are only reachable via Kubernetes internal DNS by the gateway backend.
+  - `mcp-woocommerce`, `mcp-crm`, and `mcp-tasks` are strictly `ClusterIP` services. They have **no Ingress rules**.
   - MariaDB is `ClusterIP` only, reachable only by WordPress.
-  - In Phase 7, NetworkPolicies enforce these boundaries at the network layer.
+- **Network Isolation Policy**:
+  - *ClusterIP Limitation*: Standard Kubernetes ClusterIP services prevent external ingress, but by default all pods within a cluster can communicate with any ClusterIP service.
+  - *NetworkPolicy Architecture*: Explicit Kubernetes `NetworkPolicy` objects are defined alongside workloads:
+    - `mcp-woocommerce` ingress is restricted solely to pods labeled `app.kubernetes.io/name: gateway`.
+    - `mariadb` ingress is restricted solely to pods labeled `app.kubernetes.io/name: wordpress`.
+    - External clients cannot bypass the gateway to call upstream tools directly.
 
-### D4 — Local Kubernetes Engine & Port Mapping
+### D4 — Secrets Management & Cryptographic Boundaries
+- **Kubernetes Secrets Trust Model**:
+  - Sensitive credentials (database passwords, WooCommerce consumer secrets, upstream bearer tokens) are stored in Kubernetes Secrets.
+  - *Default etcd Behavior*: In standard Kubernetes/K3s installations, Secret objects are base64-encoded, not encrypted at rest unless etcd encryption provider (`EncryptionConfiguration` with KMS/AES-CBC) is configured.
+  - *Access Restriction via RBAC*: Gateway pod is assigned a dedicated `ServiceAccount` bound by a namespaced `Role` allowing read access only to its specific secret namespace (`urumi-gateway-secrets`), preventing access to WordPress or cluster secrets.
+- **Gateway User API Key Security**:
+  - The gateway database **never stores plaintext user API keys**.
+  - Keys are generated with 32 cryptographically secure random bytes (`urumi_key_<hex>`), displayed once, and stored hashed with **SHA-256 and system salt**.
+  - Authentication checks perform constant-time hash comparisons to prevent timing attacks.
+
+### D5 — Local Kubernetes Engine & Port Mapping
 - **Provider**: **`k3d`** (K3s in Docker).
   - Matches the production-like VPS target (K3s) with identical behavior.
   - Built-in Traefik ingress controller and lightweight footprint.
 - **Port Strategy**:
-  - Host port 80 is occupied by the host's native `nginx/1.24.0`.
-  - Therefore, `k3d` will map its HTTP load balancer to **port 8080** and HTTPS to **port 8443**:
-    `k3d cluster create urumi --port "8080:80@loadbalancer" --port "8443:443@loadbalancer"`
-  - This avoids modifying or disrupting the host's running services.
+  - Host port 80 is occupied by the host's native `nginx/1.24.0`; host port 3001 is occupied by Wekan.
+  - Therefore, `k3d` maps its HTTP load balancer to **port 8080** and HTTPS to **port 8443**:
+    ```bash
+    k3d cluster create urumi --port "8080:80@loadbalancer" --port "8443:443@loadbalancer"
+    ```
+  - This avoids modifying or disrupting any running host services.
 
-### D5 — Local Domain Resolution (`nip.io`)
+### D6 — Local Domain Resolution (`nip.io`)
 - Rather than requiring manual `/etc/hosts` modifications on the host machine, all local domains use wildcard DNS via `nip.io`:
   - Store: `http://shop.127.0.0.1.nip.io:8080`
   - Dashboard & Gateway: `http://dashboard.127.0.0.1.nip.io:8080`
@@ -111,15 +134,16 @@ flowchart TD
 
 ---
 
-## 3. Workload Phasing & Resource Guardrails
+## 3. Workload Phasing & Resource Sizing Estimates
 
-To prevent premature complexity, Kubernetes resources are introduced strictly in the phase where each workload is deployed:
+> [!WARNING]
+> These resource values are **starting engineering estimates**, not proven capacity. The host development machine has 7.6 GiB total RAM with ~1.4 GiB free and active swap usage. Memory usage will be monitored continuously via `kubectl top pods` during startup and test runs.
 
-| Workload | Phase | Probes Planned | Resource Requests / Limits | Persistent Storage |
-| :--- | :--- | :--- | :--- | :--- |
-| **MariaDB** | Phase 2 | `tcpSocket: 3306` (liveness + readiness) | Request: 128Mi / 100m<br/>Limit: 384Mi / 500m | 1 GiB PVC (`/var/lib/mysql`) |
-| **WordPress** | Phase 2 | `httpGet: /wp-login.php` (liveness + readiness) | Request: 192Mi / 100m<br/>Limit: 384Mi / 500m | 1 GiB PVC (`/var/www/html`) |
-| **WooCommerce MCP** | Phase 3 | `httpGet: /health` (liveness + readiness) | Request: 64Mi / 50m<br/>Limit: 192Mi / 250m | Stateless |
-| **CRM / Tasks MCP** | Phase 4 | `httpGet: /health` (liveness + readiness) | Request: 64Mi / 50m<br/>Limit: 128Mi / 200m | Stateless (in-memory seed) |
-| **Gateway & Dashboard** | Phase 4 & 5 | `httpGet: /health` (liveness + readiness) | Request: 96Mi / 50m<br/>Limit: 256Mi / 300m | 500 MiB PVC (`/data/gateway.db`) |
-| **Total Cluster Usage** | — | — | **Total Requests: ~544 MiB RAM**<br/>**Total Limits: ~1.3 GiB RAM** | Safe for 1.4 GiB available host RAM |
+| Workload | Phase | Probes Planned | Resource Requests | Resource Limits | Persistent Storage |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **MariaDB** | Phase 2 | `tcpSocket: 3306` (liveness + readiness) | 128Mi RAM / 100m CPU | 384Mi RAM / 500m CPU | 1 GiB PVC (`/var/lib/mysql`) |
+| **WordPress** | Phase 2 | `httpGet: /wp-login.php` (liveness + readiness) | 192Mi RAM / 100m CPU | 384Mi RAM / 500m CPU | 1 GiB PVC (`/var/www/html`) |
+| **WooCommerce MCP** | Phase 3 | `httpGet: /health` (liveness + readiness) | 64Mi RAM / 50m CPU | 192Mi RAM / 250m CPU | Stateless |
+| **CRM / Tasks MCP** | Phase 4 | `httpGet: /health` (liveness + readiness) | 64Mi RAM / 50m CPU | 128Mi RAM / 200m CPU | Stateless (in-memory seed) |
+| **Gateway & Dashboard** | Phase 4 & 5 | `httpGet: /health` (liveness + readiness) | 96Mi RAM / 50m CPU | 256Mi RAM / 300m CPU | 500 MiB PVC (`/data/gateway.db`) |
+| **Total Cluster Usage** | — | — | **~544 MiB RAM** | **~1.34 GiB RAM** | Sized to fit available host RAM |

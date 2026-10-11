@@ -2,14 +2,22 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const TARGET_PORT = parseInt(process.env.PORT || '7777', 10);
-const SERVER_URL = new URL(`http://127.0.0.1:${TARGET_PORT}/mcp`);
-const VALID_API_KEY = process.env.API_KEY || 'test-secret-key-123';
-const INVALID_API_KEY = 'invalid-wrong-key-999';
+const TARGET_HOST = process.env.HOST || '127.0.0.1';
+const SERVER_URL = new URL(`http://${TARGET_HOST}:${TARGET_PORT}/mcp`);
+
+const VALID_API_KEY = process.env.MCP_SPIKE_API_KEY;
+if (!VALID_API_KEY || VALID_API_KEY.trim().length === 0) {
+  console.error('[FATAL] MCP_SPIKE_API_KEY environment variable is required to run test client.');
+  process.exit(1);
+}
+
+const INVALID_API_KEY = 'invalid-tampered-token-' + Date.now();
 
 async function runTests() {
   console.log('====================================================');
   console.log('🧪 Starting MCP Streamable HTTP Protocol Spike Tests');
   console.log(`Target: ${SERVER_URL.toString()}`);
+  console.log('Authentication: Dynamic test secret configured');
   console.log('====================================================\n');
 
   let passedTests = 0;
@@ -35,7 +43,7 @@ async function runTests() {
       await unauthClient.connect(unauthTransport);
     } catch (err: unknown) {
       rejected = true;
-      console.log('   ✅ Request successfully rejected as expected:', (err as Error).message);
+      console.log('   ✅ Request successfully rejected as expected with error response');
     }
 
     if (!rejected) {
@@ -68,7 +76,7 @@ async function runTests() {
   try {
     await authClient.connect(authTransport);
     console.log('   ✅ Connected successfully over Streamable HTTP!');
-    console.log('   ✅ Handshake completed.');
+    console.log('   ✅ Protocol handshake completed.');
     passedTests++;
     console.log('   ✅ PASS: Streamable HTTP connection & protocol handshake established.\n');
   } catch (err: unknown) {
@@ -77,7 +85,7 @@ async function runTests() {
   }
 
   // -------------------------------------------------------------------------
-  // Test 3: Tool Discovery (tools/list)
+  // Test 3: Tool Discovery (client.listTools)
   // -------------------------------------------------------------------------
   console.log('👉 [Test 3/4] Testing Tool Discovery (client.listTools)...');
   try {
@@ -101,7 +109,7 @@ async function runTests() {
   }
 
   // -------------------------------------------------------------------------
-  // Test 4: Tool Invocation (tools/call)
+  // Test 4: Tool Invocation (client.callTool)
   // -------------------------------------------------------------------------
   console.log('👉 [Test 4/4] Testing Tool Execution (client.callTool)...');
   try {

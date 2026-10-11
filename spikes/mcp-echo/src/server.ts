@@ -5,10 +5,20 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 
 const PORT = parseInt(process.env.PORT || '7777', 10);
-const EXPECTED_API_KEY = process.env.API_KEY || 'test-secret-key-123';
+// Network binding: Defaults to 127.0.0.1 for local isolation, but in Kubernetes
+// pods or Docker containers, HOST=0.0.0.0 allows traffic from ingress / cluster service mesh.
+const HOST = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
+const ALLOWED_HOSTS = process.env.ALLOWED_HOSTS ? process.env.ALLOWED_HOSTS.split(',').map(s => s.trim()) : undefined;
 
-// Use official createMcpExpressApp helper with localhost DNS rebinding protection & json parser
-const app = createMcpExpressApp({ host: '127.0.0.1' });
+// Strict security: require explicit environment variable, fail fast on missing secret
+const EXPECTED_API_KEY = process.env.MCP_SPIKE_API_KEY;
+if (!EXPECTED_API_KEY || EXPECTED_API_KEY.trim().length === 0) {
+  console.error('[FATAL] MCP_SPIKE_API_KEY environment variable is required. Server will not start without configured authentication.');
+  process.exit(1);
+}
+
+// Use official createMcpExpressApp helper with host validation & JSON parser
+const app = createMcpExpressApp({ host: HOST, allowedHosts: ALLOWED_HOSTS });
 
 // Custom Header Authentication Middleware
 // Enforces static API key authentication via Authorization header
@@ -86,10 +96,10 @@ app.post('/mcp', authMiddleware, async (req: Request, res: Response) => {
 });
 
 // Start Express HTTP listener
-const httpServer = app.listen(PORT, '127.0.0.1', () => {
-  console.log(`[MCP Spike Server] Listening on http://127.0.0.1:${PORT}/mcp`);
+const httpServer = app.listen(PORT, HOST, () => {
+  console.log(`[MCP Spike Server] Listening on http://${HOST}:${PORT}/mcp`);
   console.log(`[MCP Spike Server] Transport: Streamable HTTP (Stateless)`);
-  console.log(`[MCP Spike Server] Auth: Bearer ${EXPECTED_API_KEY}`);
+  console.log(`[MCP Spike Server] Auth: Bearer token enforcement enabled (secret value redacted)`);
 });
 
 process.on('SIGINT', () => {

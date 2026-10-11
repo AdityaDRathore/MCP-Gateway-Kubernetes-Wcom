@@ -1,0 +1,74 @@
+# Local Development Configuration (k3d / Local K8s)
+# Optimized for host machine with 7.6GiB RAM and local-path storage
+
+global:
+  environment: "local"
+
+ingress:
+  className: "traefik"
+  tls:
+    enabled: false
+
+store:
+  domain: "shop.127.0.0.1.nip.io"
+  port: 8080
+  wordpress:
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "300m"
+        memory: "256Mi"
+    persistence:
+      storageClass: "local-path"
+  mariadb:
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "96Mi"
+      limits:
+        cpu: "300m"
+        memory: "256Mi"
+    persistence:
+      storageClass: "local-path"
+
+gateway:
+  domain: "dashboard.127.0.0.1.nip.io"
+  port: 8080
+  replicas: 1
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "192Mi"
+  persistence:
+    storageClass: "local-path"
+
+upstreams:
+  woocommerce:
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "48Mi"
+      limits:
+        cpu: "150m"
+        memory: "128Mi"
+  crm:
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "48Mi"
+      limits:
+        cpu: "150m"
+        memory: "128Mi"
+  tasks:
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "48Mi"
+      limits:
+        cpu: "150m"
+        memory: "128Mi"

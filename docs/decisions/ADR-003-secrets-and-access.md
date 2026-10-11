@@ -14,7 +14,8 @@ We must enforce strict credential isolation so that:
 2. Downstream user tokens are never forwarded to upstream servers.
 3. User API keys are stored securely and support instantaneous revocation.
 4. Credentials dynamically entered by admins live in Kubernetes Secrets, guarded by Kubernetes RBAC.
-5. LLM provider costs, free-tier limits, and required environment variables are truthfully documented.
+5. Storage encryption-at-rest assumptions and trust boundaries are truthfully defined.
+6. LLM provider costs, free-tier limits, and required environment variables are truthfully documented.
 
 ---
 
@@ -23,19 +24,25 @@ We must enforce strict credential isolation so that:
 ### 1. Gateway User API Key Lifecycle
 - **Generation**: Cryptographically random 32-byte token formatted as `urumi_key_<random_hex>`.
 - **Display**: Shown to the user exactly **once** upon creation in the Dashboard modal.
-- **Storage**: The gateway **never stores plaintext API keys**. Keys are hashed using **SHA-256 with a system-wide salt** (or bcrypt) and stored in the SQLite `users_api_keys` table.
+- **Storage**: The gateway **never stores plaintext API keys**. Keys are hashed using **SHA-256 with a system-wide salt** and stored in the SQLite `users_api_keys` table.
 - **Revocation**: Admins (or the owning user) can revoke a key at any time by toggling `revoked_at` timestamp. Revocation takes effect immediately in-memory on the next request.
 
 ### 2. Static Platform Secrets
 - WordPress database credentials, MariaDB root password, and initial WooCommerce API keys are stored in a Kubernetes Secret (`urumi-store-secrets`).
 - Secrets are created declaratively via Helm templates from values files (`values-local.yaml` / `values-prod.yaml`). Real production values are never committed to git.
 
-### 3. Dynamic Upstream Credential Secrets & Gateway RBAC
+### 3. Dynamic Upstream Credential Secrets & Kubernetes Encryption-at-Rest
 - When an admin registers an upstream MCP server in the Dashboard with a custom header or bearer token:
   - The Gateway backend creates a Kubernetes Secret object in a dedicated namespace: `urumi-gateway-secrets`.
   - The Gateway's SQLite metadata table only stores the Secret name and key reference (`secretName: upstream-woo-cred`, `secretKey: token`).
   - The Gateway pod runs with a dedicated Kubernetes `ServiceAccount` (`urumi-gateway-sa`) bound via a namespaced `Role` and `RoleBinding` granting `get`, `create`, `update`, `delete` permissions **only** on `secrets` in the `urumi-gateway-secrets` namespace.
-- **Defense in Depth**: If the gateway database is dumped or SQL-injected, the attacker only acquires secret references, not the actual upstream credentials stored in etcd.
+- **Encryption-at-Rest Realities**:
+  - In standard Kubernetes and lightweight K3s clusters, Kubernetes Secret objects are base64-encoded in etcd by default.
+  - They are not automatically encrypted at rest unless an `EncryptionConfiguration` (using KMS or a provider key like `aescbc`) is enabled on the kube-apiserver / K3s control plane.
+  - The architectural boundary relies on:
+    1. Kubernetes RBAC: Non-admin service accounts and pods cannot read secrets outside their namespace.
+    2. Node-level filesystem permissions on the K3s datastore.
+    3. Separation of Concerns: The SQLite database stores only references, so a SQL injection into the gateway application cannot directly read the raw upstream secrets from disk.
 
 ### 4. Preventing Token Passthrough & Upstream Leakage
 - **No Client Token Forwarding**: Downstream clients connect using `Authorization: Bearer <urumi_user_key>`. The gateway strips this header completely before communicating with internal upstreams. It injects the upstream's dedicated credentials stored inside the cluster.

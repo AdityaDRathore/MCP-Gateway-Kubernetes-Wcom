@@ -1,0 +1,86 @@
+# Default values for urumi-platform.
+# These values are overridden by values-local.yaml and values-prod.yaml.
+
+global:
+  environment: "local"
+
+store:
+  enabled: true
+  domain: "shop.127.0.0.1.nip.io"
+  port: 8080
+  wordpress:
+    image: "wordpress:6.7-php8.2-apache"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "192Mi"
+      limits:
+        cpu: "500m"
+        memory: "384Mi"
+    persistence:
+      enabled: true
+      size: "1Gi"
+      storageClass: "local-path"
+  mariadb:
+    image: "mariadb:11.4"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "384Mi"
+    persistence:
+      enabled: true
+      size: "1Gi"
+      storageClass: "local-path"
+
+gateway:
+  enabled: true
+  domain: "dashboard.127.0.0.1.nip.io"
+  port: 8080
+  image: "urumi-gateway:latest"
+  replicas: 1
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "96Mi"
+    limits:
+      cpu: "300m"
+      memory: "256Mi"
+  persistence:
+    enabled: true
+    size: "500Mi"
+    storageClass: "local-path"
+
+upstreams:
+  woocommerce:
+    enabled: true
+    image: "mcp-woocommerce:latest"
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "250m"
+        memory: "192Mi"
+  crm:
+    enabled: true
+    image: "mcp-crm:latest"
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+  tasks:
+    enabled: true
+    image: "mcp-tasks:latest"
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"

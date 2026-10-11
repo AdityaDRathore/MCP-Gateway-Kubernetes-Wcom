@@ -1,0 +1,78 @@
+# Production-like VPS Configuration (k3s / Cloud VPS)
+# Demonstrates local-to-production parity via Helm values alone
+
+global:
+  environment: "production"
+
+ingress:
+  className: "traefik"
+  tls:
+    enabled: true
+    certManagerIssuer: "letsencrypt-prod"
+
+store:
+  domain: "store.urumi-demo.com"
+  port: 443
+  wordpress:
+    resources:
+      requests:
+        cpu: "150m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "512Mi"
+    persistence:
+      size: "5Gi"
+      storageClass: "local-path"
+  mariadb:
+    resources:
+      requests:
+        cpu: "150m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "512Mi"
+    persistence:
+      size: "5Gi"
+      storageClass: "local-path"
+
+gateway:
+  domain: "app.urumi-demo.com"
+  port: 443
+  replicas: 2
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "384Mi"
+  persistence:
+    size: "2Gi"
+    storageClass: "local-path"
+
+upstreams:
+  woocommerce:
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "250m"
+        memory: "192Mi"
+  crm:
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+  tasks:
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"

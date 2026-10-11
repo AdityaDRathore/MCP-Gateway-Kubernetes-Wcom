@@ -1,0 +1,15 @@
+{
+  "name": "@urumi/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "echo 'Linting shared package'"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

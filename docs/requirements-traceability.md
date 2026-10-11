@@ -1,50 +1,132 @@
-# Requirements Traceability Matrix & Scope Definition
+# Requirements Traceability Matrix & Detailed Verification Model
 
 ---
 
-## 1. Mandatory Requirements Traceability Matrix
+## 1. Overview & Verification Model
 
-Every mandatory requirement from the Urumi AI Take-Home Brief is mapped directly to an owning architectural component and its planned verification test:
+This document maps **every mandatory requirement and architectural statement** from the Urumi AI Take-Home Brief to its owning component, implementation phase, verification test, and current status.
 
-| Requirement ID | Requirement Description | Owning Component | Planned Verification Test | Phase |
-| :--- | :--- | :--- | :--- | :--- |
-| **REQ-01** | **Stateful Store Deployment**<br/>WooCommerce (WordPress + MariaDB) on Kubernetes with persistent storage for database and wp-content. | `infra/helm/templates/store/` | Deploy store chart with PVCs, access storefront at `http://shop.127.0.0.1.nip.io:8080`, place Cash on Delivery order, verify order in WP Admin. Restart pod and assert data persists. | Phase 2 |
-| **REQ-02** | **Custom WooCommerce MCP Server**<br/>Custom server written from scratch in TypeScript speaking Streamable HTTP, exposing 5 tools: `list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`. | `apps/mcp-woocommerce/` | Direct MCP protocol test: discover all 5 tools, invoke `create_product` and `list_orders`, assert changes reflected via WooCommerce REST API. Cluster internal only (no external Ingress). | Phase 3 |
-| **REQ-03** | **Gateway Tool Aggregation & Routing**<br/>Single MCP endpoint aggregating at least 3 upstream servers (WooCommerce, CRM, Tasks). Calls routed dynamically to correct upstreams with namespacing. | `apps/gateway/` | Client connects to `/mcp` on gateway, discovers aggregated tool list (`woocommerce__*`, `crm__*`, `tasks__*`), invokes tools across all 3 upstreams. | Phase 4 |
-| **REQ-04** | **Failure Isolation & Upstream Timeouts**<br/>A slow or dead upstream must not break tool listing or calls to other servers. Dead servers marked `Unreachable`. | `apps/gateway/` | Kill or simulate outage on Upstream 2 pod. List tools from Gateway: WooCommerce and Upstream 3 continue working cleanly; Dashboard shows Upstream 2 as `Unreachable`. | Phase 4 |
-| **REQ-05** | **Team Access Control & API Key Lifecycle**<br/>Admin & Member roles. Each user has unique API key. Plaintext shown once, stored hashed (SHA-256). Support revocation. | `apps/gateway/`<br/>`apps/dashboard/` | Generate API key for User B. User B calls tools successfully. Admin revokes User B's key. Subsequent request from User B immediately rejected with HTTP 401 Unauthorized. | Phase 5 |
-| **REQ-06** | **Audit Logging with Full Attribution**<br/>Audit log of every tool execution: who (user), server, tool, timestamp, duration, status, outcome. | `apps/gateway/`<br/>`apps/dashboard/` | Inspect Audit Log table in Dashboard: confirm exact entries for User A (Chat Agent) and User B (External Client) with matching parameters, latencies, and outcomes. | Phase 5 |
-| **REQ-07** | **In-Dashboard Chat Agent**<br/>Chat in React dashboard using an LLM to call tools through the gateway as the logged-in user. | `apps/dashboard/`<br/>`apps/gateway/` | Log in as User A in Dashboard. Prompt: *"Create product 'Urumi Hoodie' for $49"*. Agent executes tool. Verify product live on storefront. | Phase 6 |
-| **REQ-08** | **External MCP Client Integration**<br/>External client (MCP Inspector / Claude Code) connects using single gateway URL and User B's API key. | `apps/gateway/` | Connect MCP Inspector to Gateway URL with User B's API key. Execute tool queries. Execute cross-server prompt combining tools from 2 servers. | Phase 6 |
-| **REQ-09** | **Declarative Kubernetes & Helm Packaging**<br/>Everything runs in cluster. Single Helm chart with `values-local.yaml` and `values-prod.yaml`. Readiness/liveness probes, resource limits, no hardcoded secrets. | `infra/helm/` | Run `helm lint` and `helm template`. Deploy on local k3d. Inspect all pods: probes passing, limits applied, zero plaintext secrets in manifests. | Phase 7 |
+It separates:
+- **Mandatory Requirements**: Items required for the core take-home submission.
+- **Bonus Capabilities**: Explicitly noted items that add value but are strictly frozen until all mandatory requirements pass.
+- **Current Evidence / Status**: Whether the item is `Planning Only`, `Scaffolded`, `Verified in Spike`, or `Implemented & Verified in Cluster`.
 
 ---
 
-## 2. Definition of Done (End-to-End Test Matrix)
+## 2. Granular Requirements Traceability Matrix
 
-The final submission must execute and record this precise 10-step sequence with **two distinct users**:
+### Category A: Infrastructure & Platform Packaging (Kubernetes & Helm)
 
-| Step | Actor | Action | Expected Pass Criteria |
-| :---: | :--- | :--- | :--- |
-| **1** | **User (Storefront)** | Open storefront, add product to cart, check out with Cash on Delivery. | Order is placed with ID; order appears in WooCommerce Admin dashboard. |
-| **2** | **User A (Dashboard Chat)** | Prompt chat agent: *"Create a product named 'DevOps T-Shirt' priced at $29.99"*. | Tool `woocommerce__create_product` invoked; product appears live on storefront. |
-| **3** | **User A (Dashboard Chat)** | Manually place order for 'DevOps T-Shirt' on storefront, then ask agent: *"What orders came in today?"*. | Tool `woocommerce__list_orders` invoked; returns newly placed order with exact customer details. |
-| **4** | **User B (External Client)** | Connect **MCP Inspector** (or Claude Code CLI) to Gateway using User B's API key. | External client lists tools from all 3 registered servers (WooCommerce, CRM, Tasks). |
-| **5** | **User B (External Client)** | Run orders inquiry through external client. | Tool `woocommerce__list_orders` executed successfully; returns today's orders. |
-| **6** | **User B (External Client)** | Run multi-server prompt requiring two upstreams (e.g. query order and record note in Tasks MCP). | Gateway routes calls to WooCommerce MCP and Tasks MCP sequentially and returns composite result. |
-| **7** | **Admin (Dashboard)** | Admin revokes User B's API key in Dashboard. | User B's subsequent tool call is immediately rejected with HTTP 401 Unauthorized. |
-| **8** | **Admin (Dashboard)** | Admin disables Upstream 3 (Tasks MCP) in Dashboard. | Tasks tools immediately disappear from both Chat Agent and External Client tool catalogs. |
-| **9** | **Operator (Cluster)** | Operator kills Upstream 2 pod (`kubectl delete pod ...`). | WooCommerce tools continue working without crashing; Dashboard marks Upstream 2 as `Unreachable`. |
-| **10** | **Admin (Dashboard)** | Open Dashboard Audit Log view. | Every previous call (Steps 2, 3, 5, 6, 7) appears in the table with exact timestamp, duration, status, and correct user attribution (User A vs User B). |
+| Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- | :---: | :---: | :--- |
+| **INF-01** | All services run inside Kubernetes (no host-side services except local cluster manager & client). | `infra/helm/urumi-platform` | `kubectl get pods -A` reveals all platform workloads inside cluster. Host only runs k3d/Docker. | Phase 2, 7 | **Scaffolded** | k3d v5.8.3, Helm v3.17.1, kubectl v1.37.1 installed. Local cluster port mapped to 8080/8443. |
+| **INF-02** | Unified Helm chart deploying the entire platform. | `infra/helm/urumi-platform` | `helm lint` passes with 0 errors; `helm template` produces valid manifests. | Phase 1, 7 | **Verified (Scaffold)** | `helm lint` and `helm template` validated on `infra/helm/urumi-platform`. |
+| **INF-03** | Environment values files: `values-local.yaml` its owning component, implementation phase, verification test, (k3d, nip.io, port 8080) and `values-prod.yaml` (VPS, TLS, port 443). | `infra/helm/urumi-platform/` | `helm template -f values-local.yaml` and `helm template -f values-prod.yaml` render distinct valid configs. | Phase 1 | **Verified** | Both files committed; verified via `helm template`. |
+| **INF-04** | All workloads specify Kubernetes liveness and readiness probes. | Helm templates (`templates/*`) | `kubectl describe pod` confirms probes configured and passing. | Phase 2, 4, 7 | **Scaffolded** | Planned in `docs/architecture.md` resource table. |
+| **INF-05** | All workloads specify sensible CPU and memory resource requests and limits. | `values.yaml` | `kubectl describe pod` confirms limits applied; pod RAM footprint fits within machine capacity (~1.4 GiB free). | Phase 1, 7 | **Scaffolded** | Baseline requests sum to ~544 MiB RAM; limits sum to ~1.3 GiB RAM. Verified within host budget. |
+| **INF-06** | Zero hardcoded secrets in manifests; sensitive credentials mounted via Kubernetes Secrets. | `templates/secret.yaml` | `git grep` on `infra/` reveals zero committed API keys or passwords; manifests use `secretKeyRef`. | Phase 1, 7 | **Verified** | Secrets decoupled via values files; test keys dynamic. |
 
 ---
 
-## 3. Explicit Non-Goals for Round 1 (Frozen Scope)
+### Category B: Stateful Store Workload (WooCommerce on Kubernetes)
 
-To ensure the mandatory core is 100% complete, reproducible, and verifiable, the following are explicitly **frozen as non-goals** until all mandatory requirements pass:
+| Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- | :---: | :---: | :--- |
+| **STR-01** | WordPress + WooCommerce deployed on Kubernetes with MariaDB/MySQL. | `infra/helm/` (WordPress + MariaDB) | Pods reach `Running` state; `http://shop.127.0.0.1.nip.io:8080` loads WooCommerce storefront. | Phase 2 | Planned | Core goal of Phase 2. |
+| **STR-02** | Persistent storage for database and uploads (`wp-content`) via PersistentVolumeClaims. | PVC manifests (`local-path`) | Data persisted across pod restarts. | Phase 2 | Planned | Volume claim templates configured in Helm values. |
+| **STR-03** | Working storefront: browse catalog, add to cart, complete checkout with Cash on Delivery (COD). | WooCommerce core | Place test order on storefront; order generated with valid Order ID. | Phase 2 | Planned | Test Step 1 of DoD. |
+| **STR-04** | Initial test data seeded: at least 3 products with categories, pricing, and initial test orders. | WP-CLI / REST seed job | Query `GET /wp-json/wc/v3/products` returns seeded products. | Phase 2 | Planned | Seed script planned in Phase 2. |
+| **STR-05** | Pod restart durability: restarting MariaDB and WordPress pods causes zero data loss. | Kubernetes deployment | `kubectl rollout restart deployment/wordpress` and `mariadb`; re-query store, orders remain intact. | Phase 2 | Planned | Verifies PVC failure model. |
 
-1. **Multi-Store Dynamic Provisioning (Bonus)**: Out of scope for MVP. Dynamic namespace creation and store tearing down will not be started before core completion.
-2. **OAuth Gateway Replacement**: Out of scope for MVP. API key header authentication is strictly required by the Definition of Done.
-3. **Advanced Tool Semantic Vector Search**: Out of scope for MVP. Clean `{upstream}__{tool}` namespacing fully satisfies aggregation across 3 upstream servers.
-4. **Multiple Gateway Replicas / Distributed Consensus**: Out of scope for MVP. Single-replica gateway with SQLite on PVC is memory-efficient and reliable for local machine specs.
-5. **Prometheus / Grafana Observability Stacks**: Out of scope for MVP. Built-in SQLite audit logging satisfies observability requirements without consuming 1GB+ of host RAM.
+---
+
+### Category C: Custom WooCommerce MCP Server
+
+| Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- | :---: | :---: | :--- |
+| **WMC-01** | Written from scratch in TypeScript (not an off-the-shelf wrapper). | `apps/mcp-woocommerce/` | Code inspection shows custom server implementation using `@modelcontextprotocol/sdk`. | Phase 3 | Planned | Implementation in Phase 3. |
+| **WMC-02** | Uses official Streamable HTTP transport (not legacy HTTP+SSE). | `apps/mcp-woocommerce/` | Server uses `StreamableHTTPServerTransport`; verified over HTTP POST `/mcp`. | Phase 1, 3 | **Verified in Spike** | Transport pattern proven in `spikes/mcp-echo`. |
+| **WMC-03** | Implements tool `list_products` (filtering by category, status, search). | `apps/mcp-woocommerce/` | Tool call returns array of products matching query. | Phase 3 | Planned | To be built in Phase 3. |
+| **WMC-04** | Implements tool `create_product` (name, price, description, sku, category). | `apps/mcp-woocommerce/` | Tool call creates product; product immediately visible in store catalog. | Phase 3 | Planned | Test Step 2 of DoD. |
+| **WMC-05** | Implements tool `list_orders` (filtering by status, customer, date range). | `apps/mcp-woocommerce/` | Tool call returns list of store orders including newly placed orders. | Phase 3 | Planned | Test Step 3 of DoD. |
+| **WMC-06** | Implements tool `get_order` (order details, line items, billing/shipping address). | `apps/mcp-woocommerce/` | Tool call returns full order payload for valid Order ID. | Phase 3 | Planned | To be built in Phase 3. |
+| **WMC-07** | Implements tool `update_order_status` (transitions between pending, processing, completed, cancelled). | `apps/mcp-woocommerce/` | Tool call updates order status; verified in WooCommerce Admin. | Phase 3 | Planned | To be built in Phase 3. |
+| **WMC-08** | Cluster-internal service isolation: exposed via `ClusterIP` only, no external Ingress. | `infra/helm/` service manifest | Service has no Ingress; curl from host outside cluster fails; curl from gateway pod succeeds. | Phase 3 | Planned | Architectural invariant documented. |
+
+---
+
+### Category D: Team MCP Gateway Core (Aggregation, Routing, Reliability)
+
+| Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- | :---: | :---: | :--- |
+| **GTW-01** | Aggregates multiple upstream MCP servers into a single downstream MCP endpoint. | `apps/gateway/` | Client connects to `/mcp` on gateway; `tools/list` returns tools from all registered upstreams. | Phase 4 | Planned | Core gateway functionality. |
+| **GTW-02** | Connects to at least 3 distinct upstream servers (WooCommerce, CRM, Tasks). | `apps/gateway/` | Tool list contains tools from WooCommerce, CRM, and Tasks. | Phase 4 | Planned | CRM and Tasks provide deterministic test mocks. |
+| **GTW-03** | Dynamic routing of tool calls to the correct upstream server. | `apps/gateway/` | Call to `woocommerce__create_product` routes to WooCommerce pod; call to `tasks__create_task` routes to Tasks pod. | Phase 4 | Planned | Test Step 6 of DoD. |
+| **GTW-04** | Tool namespacing (`{server}__{tool}`) to prevent collisions across upstreams. | `apps/gateway/` | All aggregated tools follow `{server}__{tool}` naming format. | Phase 4 | Planned | Enforced in gateway tool registry. |
+| **GTW-05** | Failure isolation: slow or dead upstream does not crash gateway or prevent calling healthy servers. | `apps/gateway/` | Terminate Upstream 2 pod; gateway responds to `tools/list` for remaining servers and executes calls normally. | Phase 4 | Planned | Test Step 9 of DoD. |
+| **GTW-06** | Configurable per-upstream request timeouts (e.g. 10s default). | `apps/gateway/` | Simulated slow upstream returns timeout error cleanly without hanging client. | Phase 4 | Planned | Enforced in gateway proxy layer. |
+| **GTW-07** | Upstream server management: dynamically add, remove, enable, disable upstreams without gateway restart. | `apps/gateway/`<br/>`apps/dashboard/` | Disable Upstream 3 via Dashboard; its tools immediately disappear from `tools/list` response. | Phase 4, 5 | Planned | Test Step 8 of DoD. |
+| **GTW-08** | Upstream health tracking: unhealthy upstreams marked `Unreachable` in Dashboard. | `apps/gateway/`<br/>`apps/dashboard/` | Dead upstream shows status `Unreachable` in UI status pill. | Phase 4, 5 | Planned | Test Step 9 of DoD. |
+| **GTW-09** | Upstream credential isolation: downstream clients never see or provide upstream credentials. | `apps/gateway/` | Downstream client uses only User API key; gateway injects internal upstream credentials. | Phase 4 | Planned | ADR-003 security invariant. |
+| **GTW-10** | Dynamic upstream credentials stored in Kubernetes Secrets. | `apps/gateway/` K8s client | Gateway creates Secret in `urumi-gateway-secrets` namespace using dedicated ServiceAccount RBAC. | Phase 4, 5 | Planned | Outlined in ADR-003. |
+| **GTW-11** | Gateway persistence: SQLite with WAL mode on PVC (`/data/gateway.db`). | `apps/gateway/` storage | Pod restart retains users, API keys, upstream configs, and audit logs. | Phase 4 | Planned | Storage failure model documented in architecture. |
+
+---
+
+### Category E: Team Access Control & API Key Lifecycle
+
+| Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- | :---: | :---: | :--- |
+| **SEC-01** | User authentication on downstream MCP endpoint via `Authorization: Bearer <key>`. | `apps/gateway/` auth middleware | Request without key returns 401; request with valid key succeeds. | Phase 1, 5 | **Verified in Spike** | Spike Test 1 & 2 verified 401 rejection and bearer acceptance. |
+| **SEC-02** | Each team member has a unique API key. | `apps/gateway/` user management | Distinct keys generated for User A and User B. | Phase 5 | Planned | Test Step 2 (User A) vs Test Step 4 (User B). |
+| **SEC-03** | Plaintext key displayed exactly once upon creation; stored hashed (SHA-256). | `apps/gateway/` user management | Database dump reveals only SHA-256 hashes, zero plaintext keys. | Phase 5 | Planned | Security requirement from brief. |
+| **SEC-04** | Instantaneous key revocation: revoked key rejected on the very next request. | `apps/gateway/` auth middleware | Revoke User B key; immediate tool call returns HTTP 401 Unauthorized. | Phase 5 | Planned | Test Step 7 of DoD. |
+| **SEC-05** | Mandatory Admin role: manage upstreams, manage users/keys, view all audit logs, use tools. | `apps/gateway/`<br/>`apps/dashboard/` | Admin user accesses control plane endpoints and audit logs. | Phase 5 | Planned | Core role requirement. |
+| **SEC-06** | Mandatory Member role: use permitted tools, view own usage/audit logs only. | `apps/gateway/`<br/>`apps/dashboard/` | Member cannot access admin APIs or view other users' logs. | Phase 5 | Planned | Core role requirement. |
+
+---
+
+### Category F: Audit Logging & Attribution
+
+| Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- | :---: | :---: | :--- |
+| **AUD-01** | Audit log intercepts every tool call passing through the gateway. | `apps/gateway/` audit middleware | Every tool invocation produces a structured audit record. | Phase 5 | Planned | Interceptor in gateway proxy. |
+| **AUD-02** | Full attribution: records User ID, Upstream Server, Tool Name, Timestamp, Duration, Status, Outcome. | `apps/gateway/` audit table | Query audit log: fields are populated with accurate values. | Phase 5 | Planned | Test Step 10 of DoD. |
+| **AUD-03** | Audit logs persisted in SQLite on PVC across pod restarts. | `apps/gateway/` DB | Restart gateway pod; historical audit logs remain queryable. | Phase 5 | Planned | Durability requirement. |
+| **AUD-04** | Dashboard Audit Log UI: searchable, filterable table of tool executions. | `apps/dashboard/` | Open audit log view; filter by user (User A vs User B) and status. | Phase 5 | Planned | Test Step 10 of DoD. |
+
+---
+
+### Category G: In-Dashboard Chat Agent
+
+| Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- | :---: | :---: | :--- |
+| **CHT-01** | Web dashboard built in React + Vite with clean UI. | `apps/dashboard/` | Browser loads dashboard; responsive layout, tab navigation. | Phase 5 | Planned | Frontend SPA. |
+| **CHT-02** | Chat interface communicating with an LLM (Gemini / Claude / OpenAI / Ollama). | `apps/dashboard/`<br/>`apps/gateway/` | User sends message; LLM streams response in chat UI. | Phase 6 | Planned | Chat implementation. |
+| **CHT-03** | LLM executes tools through the gateway as the logged-in user (User A). | `apps/gateway/` agent loop | Chat agent calls `woocommerce__create_product`; audit log attributes execution to User A. | Phase 6 | Planned | Test Step 2 of DoD. |
+| **CHT-04** | Real-time tool execution visibility in chat (tool name, inputs, status pill). | `apps/dashboard/` | Chat UI renders collapsible tool call block during execution. | Phase 6 | Planned | UX requirement from brief. |
+
+---
+
+### Category H: External MCP Client Support & Interoperability
+
+| Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- | :---: | :---: | :--- |
+| **EXT-01** | External client (MCP Inspector, Claude Code, Cursor) connects to gateway URL. | `apps/gateway/` `/mcp` endpoint | Run `npx @modelcontextprotocol/inspector` connecting to gateway; discovery succeeds. | Phase 1, 6 | **Verified in Spike** | Protocol verified with MCP client in spike. |
+| **EXT-02** | External client authenticates with User B's API key. | `apps/gateway/` `/mcp` endpoint | MCP Inspector connects using `Authorization: Bearer <user_b_key>`. | Phase 6 | Planned | Test Step 4 of DoD. |
+| **EXT-03** | External client executes cross-server workflow combining tools from 2 servers. | `apps/gateway/` | Prompt combining WooCommerce and Tasks executed; composite result returned. | Phase 6 | Planned | Test Step 6 of DoD. |
+
+---
+
+## 3. Scope Boundaries: Bonus vs Mandatory Features
+
+| Feature | Classification | Policy for Round 1 |
+| :--- | :---: | :--- |
+| **Admin and Member Roles** | **MANDATORY** | Fully implemented in Phase 5. |
+| **Unique User API Keys + Instant Revocation** | **MANDATORY** | Fully implemented in Phase 5. |
+| **Audit Logging with User Attribution** | **MANDATORY** | Fully implemented in Phase 5. |
+| **Failure Isolation & Upstream Timeouts** | **MANDATORY** | Fully implemented in Phase 4. |
+| **External Client Support (MCP Inspector)** | **MANDATORY** | Fully implemented in Phase 6. |
+| **Per-Tool Granular Role Restrictions** | **BONUS** | Frozen until Steps 1–10 pass. |
+| **Multi-Store Dynamic Provisioning** | **BONUS** | Frozen until Steps 1–10 pass. |
+| **OAuth / OIDC Gateway Replacement** | **OUT OF SCOPE** | Out of scope (API keys required by brief). |
