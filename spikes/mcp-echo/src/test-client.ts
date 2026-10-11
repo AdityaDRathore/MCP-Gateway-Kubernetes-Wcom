@@ -1,9 +1,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const TARGET_PORT = parseInt(process.env.PORT || '7777', 10);
-const TARGET_HOST = process.env.HOST || '127.0.0.1';
-const SERVER_URL = new URL(`http://${TARGET_HOST}:${TARGET_PORT}/mcp`);
+const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
+const DEFAULT_PORT = process.env.PORT || '7777';
+const SERVER_URL = new URL(process.env.MCP_SERVER_URL || `http://${DEFAULT_HOST}:${DEFAULT_PORT}/mcp`);
 
 const VALID_API_KEY = process.env.MCP_SPIKE_API_KEY;
 if (!VALID_API_KEY || VALID_API_KEY.trim().length === 0) {
@@ -24,34 +24,50 @@ async function runTests() {
   let totalTests = 4;
 
   // -------------------------------------------------------------------------
-  // Test 1: Unauthenticated request must be rejected with 401 Unauthorized
+  // Test 1: Authentication enforcement (Reject Missing and Invalid Keys)
   // -------------------------------------------------------------------------
   console.log('👉 [Test 1/4] Testing Authentication Enforcement (Reject Invalid/Missing Key)...');
   try {
-    const unauthTransport = new StreamableHTTPClientTransport(SERVER_URL, {
+    // 1A: Test with completely missing Authorization header
+    const missingAuthTransport = new StreamableHTTPClientTransport(SERVER_URL, {
+      requestInit: {
+        headers: {}
+      }
+    });
+    const missingAuthClient = new Client({ name: 'missing-auth-client', version: '1.0.0' });
+    let missingRejected = false;
+    try {
+      await missingAuthClient.connect(missingAuthTransport);
+    } catch {
+      missingRejected = true;
+      console.log('   ✅ Sub-test 1A: Request without Authorization header rejected (401).');
+    }
+    if (!missingRejected) {
+      throw new Error('FAILED: Server accepted connection with missing Authorization header!');
+    }
+
+    // 1B: Test with invalid/tampered Authorization header
+    const invalidAuthTransport = new StreamableHTTPClientTransport(SERVER_URL, {
       requestInit: {
         headers: {
           Authorization: `Bearer ${INVALID_API_KEY}`
         }
       }
     });
-
-    const unauthClient = new Client({ name: 'unauth-client', version: '1.0.0' });
-    let rejected = false;
-
+    const invalidAuthClient = new Client({ name: 'invalid-auth-client', version: '1.0.0' });
+    let invalidRejected = false;
     try {
-      await unauthClient.connect(unauthTransport);
-    } catch (err: unknown) {
-      rejected = true;
-      console.log('   ✅ Request successfully rejected as expected with error response');
+      await invalidAuthClient.connect(invalidAuthTransport);
+    } catch {
+      invalidRejected = true;
+      console.log('   ✅ Sub-test 1B: Request with invalid Authorization token rejected (401).');
     }
-
-    if (!rejected) {
+    if (!invalidRejected) {
       throw new Error('FAILED: Server accepted connection with invalid API key!');
     }
 
     passedTests++;
-    console.log('   ✅ PASS: Authentication barrier verified (401 Unauthorized).\n');
+    console.log('   ✅ PASS: Authentication barrier verified for both missing and invalid credentials.\n');
   } catch (err: unknown) {
     console.error('   ❌ FAIL Test 1:', (err as Error).message, '\n');
   }

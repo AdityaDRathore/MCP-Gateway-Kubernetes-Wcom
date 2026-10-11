@@ -39,7 +39,9 @@ store:
 gateway:
   domain: "app.urumi-demo.com"
   port: 443
-  replicas: 2
+  # Single replica is strictly required when using SQLite on ReadWriteOnce PVC (/data/gateway.db)
+  # to prevent database locking and multi-writer corruption.
+  replicas: 1
   resources:
     requests:
       cpu: "100m"

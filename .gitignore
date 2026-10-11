@@ -9,4 +9,3 @@ __pycache__/
 *.log
 dist/
 build/
-package-lock.json

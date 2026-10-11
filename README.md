@@ -107,17 +107,18 @@ nvm use
 ```
 
 ### 2. Install Workspace Dependencies & Build
-Install all workspace dependencies and compile the shared TypeScript packages:
+Install root and workspace dependencies from the committed lockfile and compile the shared TypeScript packages:
 ```bash
-npm install
+npm ci
 npm run build
 ```
 
 ### 3. Run the MCP Streamable HTTP Protocol Spike
-The protocol spike verifies Streamable HTTP tool discovery, tool execution, and Bearer token authentication without hardcoded secrets:
+The protocol spike verifies Streamable HTTP tool discovery, tool execution, and Bearer token authentication without hardcoded secrets. As a standalone technical spike, install its pinned dependencies from its committed lockfile and compile:
 
 ```bash
 cd spikes/mcp-echo
+npm ci
 npm run build
 
 # Start the spike server with a dynamic test key in the background
@@ -128,7 +129,7 @@ export HOST="127.0.0.1"
 node dist/server.js &
 SERVER_PID=$!
 
-# Run the test client against the live server
+# Run the test client against the live server (uses MCP_SERVER_URL)
 export MCP_SERVER_URL="http://127.0.0.1:7788/mcp"
 export MCP_SPIKE_API_KEY="$MCP_SPIKE_API_KEY"
 
@@ -137,7 +138,7 @@ node dist/test-client.js
 # Clean up server
 kill $SERVER_PID
 ```
-**Expected Outcome**: 4/4 tests pass (Authentication 401 barrier, Streamable HTTP handshake, Tool discovery, Tool execution).
+**Expected Outcome**: 4/4 tests pass (Authentication 401 barrier on missing and invalid keys, Streamable HTTP handshake, Tool discovery, Tool execution).
 
 ### 4. Validate the Helm Packaging
 Validate chart syntax and template generation for both local and production profiles:

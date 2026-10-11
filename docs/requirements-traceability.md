@@ -6,10 +6,10 @@
 
 This document maps **every mandatory requirement and architectural statement** from the Urumi AI Take-Home Brief to its owning component, implementation phase, verification test, and current status.
 
-It separates:
-- **Mandatory Requirements**: Items required for the core take-home submission.
+It strictly separates:
+- **Scaffold / Protocol Spike Proof (Phase 1)**: Verifies foundational toolchains, syntax, packaging skeletons, and wire protocols.
+- **Workload Implementation & Cluster Verification (Phases 2–7)**: Verifies live workloads, pods, PVC storage, ingress, and real end-to-end integration.
 - **Bonus Capabilities**: Explicitly noted items that add value but are strictly frozen until all mandatory requirements pass.
-- **Current Evidence / Status**: Whether the item is `Planning Only`, `Scaffolded`, `Verified in Spike`, or `Implemented & Verified in Cluster`.
 
 ---
 
@@ -19,12 +19,12 @@ It separates:
 
 | Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **INF-01** | All services run inside Kubernetes (no host-side services except local cluster manager & client). | `infra/helm/urumi-platform` | `kubectl get pods -A` reveals all platform workloads inside cluster. Host only runs k3d/Docker. | Phase 2, 7 | **Scaffolded** | k3d v5.8.3, Helm v3.17.1, kubectl v1.37.1 installed. Local cluster port mapped to 8080/8443. |
-| **INF-02** | Unified Helm chart deploying the entire platform. | `infra/helm/urumi-platform` | `helm lint` passes with 0 errors; `helm template` produces valid manifests. | Phase 1, 7 | **Verified (Scaffold)** | `helm lint` and `helm template` validated on `infra/helm/urumi-platform`. |
-| **INF-03** | Environment values files: `values-local.yaml` its owning component, implementation phase, verification test, (k3d, nip.io, port 8080) and `values-prod.yaml` (VPS, TLS, port 443). | `infra/helm/urumi-platform/` | `helm template -f values-local.yaml` and `helm template -f values-prod.yaml` render distinct valid configs. | Phase 1 | **Verified** | Both files committed; verified via `helm template`. |
-| **INF-04** | All workloads specify Kubernetes liveness and readiness probes. | Helm templates (`templates/*`) | `kubectl describe pod` confirms probes configured and passing. | Phase 2, 4, 7 | **Scaffolded** | Planned in `docs/architecture.md` resource table. |
-| **INF-05** | All workloads specify sensible CPU and memory resource requests and limits. | `values.yaml` | `kubectl describe pod` confirms limits applied; pod RAM footprint fits within machine capacity (~1.4 GiB free). | Phase 1, 7 | **Scaffolded** | Baseline requests sum to ~544 MiB RAM; limits sum to ~1.3 GiB RAM. Verified within host budget. |
-| **INF-06** | Zero hardcoded secrets in manifests; sensitive credentials mounted via Kubernetes Secrets. | `templates/secret.yaml` | `git grep` on `infra/` reveals zero committed API keys or passwords; manifests use `secretKeyRef`. | Phase 1, 7 | **Verified** | Secrets decoupled via values files; test keys dynamic. |
+| **INF-01** | All services run inside Kubernetes (no host-side services except local cluster manager & client). | `infra/helm/urumi-platform` | `kubectl get pods -A` reveals all platform workloads inside cluster. Host only runs k3d/Docker. | Phase 2, 7 | **Tooling Ready / Planned** | k3d v5.8.3, Helm v3.17.1, kubectl v1.37.1 installed. Cluster creation scheduled for Phase 2. |
+| **INF-02** | Unified Helm chart deploying the entire platform. | `infra/helm/urumi-platform` | `helm lint` passes with 0 errors; `helm template` produces valid manifests. | Phase 1, 7 | **Scaffold Verified (Templates Pending)** | Scaffold (Chart.yaml, helpers, configmap.yaml) passes `helm lint` and renders cleanly. Workload templates (Deployments, Services, PVCs, Ingress) will be added incrementally in Phase 2, 4, and 7. |
+| **INF-03** | Environment values files: `values-local.yaml` (k3d, nip.io, port 8080) and `values-prod.yaml` (VPS, port 443). | `infra/helm/urumi-platform/` | `helm template -f values-local.yaml` and `helm template -f values-prod.yaml` render distinct valid configs. | Phase 1 | **Scaffold Verified** | Both values files render successfully against scaffold ConfigMap. Production scaling is explicitly pinned to 1 replica (matching SQLite on PVC). Production TLS/Ingress tests deferred to Phase 7. |
+| **INF-04** | All workloads specify Kubernetes liveness and readiness probes. | Helm templates (`templates/*`) | `kubectl describe pod` confirms probes configured and passing. | Phase 2, 4, 7 | **Planned** | Probe contracts defined in `docs/architecture.md`. Templates will be implemented alongside respective workloads. |
+| **INF-05** | All workloads specify sensible CPU and memory resource requests and limits. | `values.yaml` | `kubectl describe pod` confirms limits applied; pod RAM footprint fits within machine capacity (~1.4 GiB free). | Phase 2, 7 | **Sizing Estimated (Verification Planned)** | Baseline requests sum to ~544 MiB RAM; limits sum to ~1.34 GiB RAM. Actual enforcement and memory pressure will be verified under load in Phase 2 & 4. |
+| **INF-06** | Zero hardcoded secrets in manifests; sensitive credentials mounted via Kubernetes Secrets. | `templates/secret.yaml` | `git grep` on `infra/` reveals zero committed API keys or passwords; manifests use `secretKeyRef`. | Phase 2, 7 | **Planned** | Secret separation architecture established. Store secrets manifest will be created in Phase 2; Gateway secrets in Phase 4. |
 
 ---
 
@@ -45,7 +45,7 @@ It separates:
 | Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
 | **WMC-01** | Written from scratch in TypeScript (not an off-the-shelf wrapper). | `apps/mcp-woocommerce/` | Code inspection shows custom server implementation using `@modelcontextprotocol/sdk`. | Phase 3 | Planned | Implementation in Phase 3. |
-| **WMC-02** | Uses official Streamable HTTP transport (not legacy HTTP+SSE). | `apps/mcp-woocommerce/` | Server uses `StreamableHTTPServerTransport`; verified over HTTP POST `/mcp`. | Phase 1, 3 | **Verified in Spike** | Transport pattern proven in `spikes/mcp-echo`. |
+| **WMC-02** | Uses official Streamable HTTP transport (not legacy HTTP+SSE). | `apps/mcp-woocommerce/` | Server uses `StreamableHTTPServerTransport`; verified over HTTP POST `/mcp`. | Phase 1, 3 | **Protocol Verified in Spike (App Planned)** | Transport architecture proven in `spikes/mcp-echo`. Application implementation planned for Phase 3. |
 | **WMC-03** | Implements tool `list_products` (filtering by category, status, search). | `apps/mcp-woocommerce/` | Tool call returns array of products matching query. | Phase 3 | Planned | To be built in Phase 3. |
 | **WMC-04** | Implements tool `create_product` (name, price, description, sku, category). | `apps/mcp-woocommerce/` | Tool call creates product; product immediately visible in store catalog. | Phase 3 | Planned | Test Step 2 of DoD. |
 | **WMC-05** | Implements tool `list_orders` (filtering by status, customer, date range). | `apps/mcp-woocommerce/` | Tool call returns list of store orders including newly placed orders. | Phase 3 | Planned | Test Step 3 of DoD. |
@@ -77,7 +77,7 @@ It separates:
 
 | Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **SEC-01** | User authentication on downstream MCP endpoint via `Authorization: Bearer <key>`. | `apps/gateway/` auth middleware | Request without key returns 401; request with valid key succeeds. | Phase 1, 5 | **Verified in Spike** | Spike Test 1 & 2 verified 401 rejection and bearer acceptance. |
+| **SEC-01** | User authentication on downstream MCP endpoint via `Authorization: Bearer <key>`. | `apps/gateway/` auth middleware | Request without key returns 401; request with valid key succeeds. | Phase 1, 5 | **Protocol Verified in Spike (App Planned)** | Spike Test 1 (missing + invalid key) and Test 2 verified 401 rejection and bearer acceptance. App middleware planned in Phase 5. |
 | **SEC-02** | Each team member has a unique API key. | `apps/gateway/` user management | Distinct keys generated for User A and User B. | Phase 5 | Planned | Test Step 2 (User A) vs Test Step 4 (User B). |
 | **SEC-03** | Plaintext key displayed exactly once upon creation; stored hashed (SHA-256). | `apps/gateway/` user management | Database dump reveals only SHA-256 hashes, zero plaintext keys. | Phase 5 | Planned | Security requirement from brief. |
 | **SEC-04** | Instantaneous key revocation: revoked key rejected on the very next request. | `apps/gateway/` auth middleware | Revoke User B key; immediate tool call returns HTTP 401 Unauthorized. | Phase 5 | Planned | Test Step 7 of DoD. |
@@ -112,7 +112,7 @@ It separates:
 
 | Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **EXT-01** | External client (MCP Inspector, Claude Code, Cursor) connects to gateway URL. | `apps/gateway/` `/mcp` endpoint | Run `npx @modelcontextprotocol/inspector` connecting to gateway; discovery succeeds. | Phase 1, 6 | **Verified in Spike** | Protocol verified with MCP client in spike. |
+| **EXT-01** | External client (MCP Inspector, Claude Code, Cursor) connects to gateway URL. | `apps/gateway/` `/mcp` endpoint | Run `npx @modelcontextprotocol/inspector` connecting to gateway; discovery succeeds. | Phase 1, 6 | **Protocol Verified in Spike (App Planned)** | Protocol capability verified with SDK client in spike. Live gateway connection planned for Phase 6. |
 | **EXT-02** | External client authenticates with User B's API key. | `apps/gateway/` `/mcp` endpoint | MCP Inspector connects using `Authorization: Bearer <user_b_key>`. | Phase 6 | Planned | Test Step 4 of DoD. |
 | **EXT-03** | External client executes cross-server workflow combining tools from 2 servers. | `apps/gateway/` | Prompt combining WooCommerce and Tasks executed; composite result returned. | Phase 6 | Planned | Test Step 6 of DoD. |
 
