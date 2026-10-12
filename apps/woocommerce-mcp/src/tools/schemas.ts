@@ -33,6 +33,7 @@ export const ListProductsInputShape = {
   search: z.string().max(100).optional().describe('Optional search query to filter products by title or description'),
   sku: z.string().max(50).optional().describe('Optional SKU filter'),
   status: ProductStatusEnum.optional().describe('Optional product status filter'),
+  category: z.string().max(50).optional().describe('Optional category filter (category ID or slug)'),
 };
 
 // 2. create_product input shape
@@ -51,17 +52,17 @@ export const ListOrdersInputShape = {
   page: z.number().int().min(1).default(1).describe('Page number of results (1-indexed, positive integer)'),
   per_page: z.number().int().min(1).max(50).default(10).describe('Number of orders per page (bounded 1 to 50)'),
   status: OrderStatusEnum.optional().describe('Optional order status filter'),
-  after: z.string().datetime({ message: 'Must be a valid ISO-8601 timestamp' }).optional().describe('Optional ISO-8601 start timestamp filter'),
-  before: z.string().datetime({ message: 'Must be a valid ISO-8601 timestamp' }).optional().describe('Optional ISO-8601 end timestamp filter'),
+  after: z.string().datetime({ offset: true, message: 'Must be a valid ISO-8601 timestamp' }).optional().describe('Optional ISO-8601 start timestamp filter'),
+  before: z.string().datetime({ offset: true, message: 'Must be a valid ISO-8601 timestamp' }).optional().describe('Optional ISO-8601 end timestamp filter'),
 };
 
 // 4. get_order input shape
 export const GetOrderInputShape = {
-  order_id: z.number().int().positive().describe('Unique WooCommerce order ID (positive integer)'),
+  order_id: z.number().int().positive().safe().describe('Unique WooCommerce order ID (positive safe integer)'),
 };
 
 // 5. update_order_status input shape
 export const UpdateOrderStatusInputShape = {
-  order_id: z.number().int().positive().describe('Unique WooCommerce order ID to update (positive integer)'),
+  order_id: z.number().int().positive().safe().describe('Unique WooCommerce order ID to update (positive safe integer)'),
   status: OrderStatusEnum.describe('Target order status from approved allow-list'),
 };

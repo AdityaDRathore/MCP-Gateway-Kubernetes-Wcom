@@ -33,6 +33,7 @@ export interface ListProductsParams {
   search?: string;
   sku?: string;
   status?: 'publish' | 'draft' | 'pending' | 'private';
+  category?: string;
 }
 
 export interface CreateProductPayload {
@@ -246,6 +247,7 @@ export class WooCommerceClient {
         search: params.search,
         sku: params.sku,
         status: params.status,
+        category: params.category,
       },
       operation: 'list_products',
     });

@@ -6,27 +6,30 @@ import { AppConfig } from './config.js';
 import { healthHandler } from './http/health.js';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logging/logger.js';
+import { WooCommerceClient } from './woocommerce/client.js';
 
 /**
  * Creates and configures an MCP server instance with all five WooCommerce tools registered.
  */
-export function createWooCommerceMcpServer(): McpServer {
+export function createWooCommerceMcpServer(client?: WooCommerceClient): McpServer {
   const server = new McpServer({
     name: 'urumi-woocommerce-mcp',
     version: '1.0.0',
   });
 
-  registerAllTools(server);
+  registerAllTools(server, client);
   return server;
 }
 
 /**
  * Builds the Express application hosting the Streamable HTTP transport and health probe.
  */
-export function createExpressApp(config: AppConfig) {
+export function createExpressApp(config: AppConfig, client?: WooCommerceClient) {
   const app = createMcpExpressApp({
     host: config.HOST,
   });
+
+  const wcClient = client ?? new WooCommerceClient(config);
 
   // Operational health probe for Kubernetes liveness & readiness checks
   app.get('/health', healthHandler);
@@ -34,7 +37,7 @@ export function createExpressApp(config: AppConfig) {
   // Stateless Streamable HTTP transport endpoint
   app.post('/mcp', async (req: Request, res: Response) => {
     const startTime = Date.now();
-    const server = createWooCommerceMcpServer();
+    const server = createWooCommerceMcpServer(wcClient);
 
     try {
       const transport = new StreamableHTTPServerTransport({

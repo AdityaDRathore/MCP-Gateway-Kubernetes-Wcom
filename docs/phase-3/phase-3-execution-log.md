@@ -148,4 +148,67 @@
     - TypeScript compilation: 0 errors via `npm run typecheck` and `npm run build`.
     - Baseline Store Preservation: WP-CLI query confirms products 10, 11, 12 and Order #14 are 100% intact.
 
+---
+
+## 5. Gate G4: Read Tools Implementation & Verification (2026-10-12)
+
+### Scope & Work Order
+Authorized by Technical Lead to implement and verify exactly the three read tools:
+1. `list_products`
+2. `list_orders`
+3. `get_order`
+
+### Implementation Details
+- **`list_products`**:
+  - Bound pagination: `page >= 1` (default 1), `per_page` bounded between 1 and 50 (default 10).
+  - Validated filters: `category` (category ID or slug, max 50 chars), `sku` (max 50 chars), `status` (restricted to approved enum: `publish`, `draft`, `pending`, `private`), and `search` (max 100 chars).
+  - Wired directly to `WooCommerceClient.listProducts()`.
+  - Output mapped via `projectProduct()` returning bounded summary (ID, title, SKU, type, status, price, regular price, stock status, categories).
+  - Clean error handling: empty results return `[]`; upstream failures return `{ isError: true, content: [{ text: "Error listing products: ..." }] }`.
+- **`list_orders`**:
+  - Bound pagination: `page >= 1`, `per_page` bounded between 1 and 50.
+  - Validated filters: `status` (approved enum: `pending`, `processing`, `on-hold`, `completed`, `cancelled`, `failed`), `after` and `before` (ISO-8601 timestamps supporting timezone offsets).
+  - Date format & range validation: checks `isNaN` for individual timestamps; strictly validates that `after` is earlier than `before`. If `after >= before`, the call is rejected immediately before making any upstream HTTP request.
+  - Wired directly to `WooCommerceClient.listOrders()`.
+  - Output mapped via `projectOrder()` strictly scrubbing all customer PII (addresses, phone numbers, emails, customer notes, IP addresses, user agents).
+- **`get_order`**:
+  - Strict order ID validation: requires a positive safe integer (`z.number().int().positive().safe()`, plus runtime guard `Number.isSafeInteger(order_id) && order_id > 0`). Rejects floats, negative numbers, zero, and unsafe integers before upstream calls.
+  - Wired directly to `WooCommerceClient.getOrder(orderId)`.
+  - Output mapped via `projectOrder()` containing only ID, status, currency, total, date created, payment method, and line items (item ID, name, product ID, quantity, subtotal, total, SKU).
+  - **Strict PII Omission Contract**: verified on the returned tool output string (`content[0].text`). Output contains zero raw WooCommerce order fields; billing, shipping, email, phone, customer note, customer IP, and customer user agent are completely excluded.
+  - Maps `NotFoundError` (HTTP 404) to clean error response: `{ isError: true, content: [{ text: "Error retrieving order ... not found in store catalog." }] }`.
+- **Tool Discovery & Gate Boundary Contract**:
+  - Exactly 5 tools registered and advertised via MCP `tools/list`: `list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`.
+  - Write tools `create_product` and `update_order_status` remain intentionally unactivated in Gate G4. Protocol and unit invocations return `{ isError: true }` with message: `"Tool ... is registered for discovery but not activated in Gate G4. Mutation operations are scheduled for Gate G5."`
+- **Dependency Injection & Server Wiring**:
+  - `createWooCommerceMcpServer(client?: WooCommerceClient)` and `createExpressApp(config: AppConfig, client?: WooCommerceClient)` support optional client injection for isolated protocol testing, while defaulting to live `WooCommerceClient` with environment config in production/live execution.
+
+### Verification Evidence & Test Results
+1. **Unit & Contract Tests (`apps/woocommerce-mcp/test/unit/tools.test.ts` + regression)**:
+   - **Command**: `npm run test:unit --workspace=apps/woocommerce-mcp`
+   - **Result**: 38/38 tests passing across 5 test suites (`tools.test.ts`, `oauth.test.ts`, `errors.test.ts`, `mappers.test.ts`, `logger.test.ts`).
+   - Validated schema constraints on all shapes, handler error handling, date range rejection (`after >= before`), order ID safe integer guards, write tool deferral messages, and PII omission contract.
+2. **MCP Protocol Transport Tests (`apps/woocommerce-mcp/test/protocol/read-tools.test.ts` + `handshake.test.ts`)**:
+   - **Command**: `npm run test:protocol --workspace=apps/woocommerce-mcp`
+   - **Result**: 21/21 checks passing over Streamable HTTP transport (`POST /mcp`).
+   - Verified exact five tool discovery (`listTools`).
+   - Verified calling `list_products`, `list_orders`, and `get_order` through MCP client transport (`callTool`).
+   - Verified invalid inputs (page 0, per_page 51, unapproved status, invalid date strings, negative order ID, float order ID) are rejected by protocol before handler/client calls.
+   - Verified date range validation rejection (`after >= before`) over protocol without upstream request.
+   - Verified PII omission on returned wire response text (`res.content[0].text`).
+   - Verified write tools return `isError: true` with Gate G5 deferral message over transport.
+3. **Live WooCommerce Store Integration Tests (`apps/woocommerce-mcp/test/integration/read-tools.live.test.ts` + `client.live.test.ts`)**:
+   - **Command**: `npm run test:integration --workspace=apps/woocommerce-mcp`
+   - **Result**: 27/27 tests passing against live WordPress/WooCommerce store.
+   - `list_products`: verified live catalog retrieval of seeded products (`URUMI-MUG-001`, `URUMI-MOUSE-001`, `URUMI-NOTE-001`), category filtering (`16` Accessories -> Mug, `17` Electronics -> Mouse, `18` Stationery -> Notebook), status filtering, search filtering, and bounded pagination (`per_page: 2`).
+   - `list_orders`: verified retrieval of live Order #14, status filtering (`processing` matches #14, `completed` returns `[]`), date range filtering (`2026-10-11T00:00:00Z` to `2026-10-12T00:00:00Z` matches #14), and date range rejection (`after >= before`).
+   - `get_order`: verified retrieval of live Order #14 (total ₹299.00, line item `URUMI-MUG-001`), clean 404 mapping for nonexistent ID `999999`, and verified zero PII in returned payload.
+   - Write tools confirmed unactivated over live server.
+4. **Baseline Data Preservation**:
+   - Verified all 3 seeded products (10, 11, 12) remain intact via WP-CLI and live REST queries.
+   - Verified Order #14 remains in `wc-processing` status with 1x `URUMI-MUG-001` (₹299.00) via WP-CLI.
+5. **Secret & PII Log Sanitization**:
+   - Logs verified during all test runs: zero plaintext consumer secrets, signed URLs, OAuth signatures, or customer PII in structured logs.
+
+
 
