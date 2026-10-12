@@ -141,9 +141,18 @@ flowchart TD
 
 | Workload | Phase | Probes Planned | Resource Requests | Resource Limits | Persistent Storage |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **MariaDB** | Phase 2 | `tcpSocket: 3306` (liveness + readiness) | 128Mi RAM / 100m CPU | 384Mi RAM / 500m CPU | 1 GiB PVC (`/var/lib/mysql`) |
-| **WordPress** | Phase 2 | `httpGet: /wp-login.php` (liveness + readiness) | 192Mi RAM / 100m CPU | 384Mi RAM / 500m CPU | 1 GiB PVC (`/var/www/html`) |
+| **MariaDB** | Phase 2 | `healthcheck.sh` (startup, readiness, liveness) | 128Mi RAM / 100m CPU | 384Mi RAM / 500m CPU | 1 GiB PVC (`/var/lib/mysql`) |
+| **WordPress** | Phase 2 | `httpGet: /wp-login.php` (startup + readiness), `tcpSocket: 80` (liveness) | 256Mi RAM / 100m CPU | 512Mi RAM / 500m CPU | 1 GiB PVC (`/var/www/html`) |
 | **WooCommerce MCP** | Phase 3 | `httpGet: /health` (liveness + readiness) | 64Mi RAM / 50m CPU | 192Mi RAM / 250m CPU | Stateless |
 | **CRM / Tasks MCP** | Phase 4 | `httpGet: /health` (liveness + readiness) | 64Mi RAM / 50m CPU | 128Mi RAM / 200m CPU | Stateless (in-memory seed) |
 | **Gateway & Dashboard** | Phase 4 & 5 | `httpGet: /health` (liveness + readiness) | 96Mi RAM / 50m CPU | 256Mi RAM / 300m CPU | 500 MiB PVC (`/data/gateway.db`) |
-| **Total Cluster Usage** | — | — | **~544 MiB RAM** | **~1.34 GiB RAM** | Sized to fit available host RAM |
+| **Total Cluster Usage** | — | — | **~608 MiB RAM** | **~1.47 GiB RAM** | Sized to fit available host RAM (~2.0 GiB available) |
+
+For detailed architectural decision records, see:
+- [**ADR-001**](decisions/ADR-001-stack-and-deployment.md): Application Stack, Node.js 24 LTS, and Local Kubernetes Strategy
+- [**ADR-002**](decisions/ADR-002-mcp-compatibility.md): MCP SDK `@modelcontextprotocol/sdk@1.32.1`, Streamable HTTP Transport, and Wire Revision `2024-11-05`
+- [**ADR-003**](decisions/ADR-003-secrets-and-access.md): Secrets Management, RBAC Boundaries, and Truthful LLM Cost Analysis
+- [**ADR-004**](decisions/ADR-004-stateful-storage-and-workload-controllers.md): Stateful Storage Architecture and Workload Controller Selection
+- [**ADR-005**](decisions/ADR-005-local-rest-api-security-boundary.md): Local Development REST API Authentication and Security Boundary
+- [**ADR-006**](decisions/ADR-006-image-digest-locking-and-resource-tuning.md): Kubernetes Version Parity, Immutable Image Digest Locking, and Cgroup Memory Budgeting
+
