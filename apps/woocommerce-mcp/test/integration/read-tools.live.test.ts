@@ -344,42 +344,38 @@ describe('Gate G4 Live Read Tools End-to-End Integration Tests', () => {
     });
   });
 
-  // --- 5. Unactivated Write Tools on Live Server ---
-  describe('5. Write Tools Remain Inactive on Live Server', () => {
-    test('create_product returns Gate G5 deferral message over live transport', async () => {
-      const res = await mcpClient.callTool({
-        name: 'create_product',
-        arguments: {
-          name: 'Live G4 Attempt',
-          sku: 'LIVE-G4-ATTEMPT',
-          regular_price: '199.00',
-          status: 'draft',
-        },
-      });
-
-      assert.equal(res.isError, true);
-      assert.ok(
-        (res.content[0] as { text: string }).text.includes(
-          'Tool "create_product" is registered for discovery but not activated in Gate G4. Mutation operations are scheduled for Gate G5.'
-        )
-      );
+  // --- 5. Write Tools Input Validation on Live Server ---
+  describe('5. Write Tools Input Validation on Live Server', () => {
+    test('create_product rejects invalid SKU with spaces over live transport', async () => {
+      try {
+        await mcpClient.callTool({
+          name: 'create_product',
+          arguments: {
+            name: 'Invalid SKU Product',
+            sku: 'INVALID SKU SPACES',
+            regular_price: '199.00',
+            status: 'draft',
+          },
+        });
+        assert.fail('Expected protocol rejection for SKU with spaces');
+      } catch (err: unknown) {
+        assert.ok(err instanceof Error);
+      }
     });
 
-    test('update_order_status returns Gate G5 deferral message over live transport', async () => {
-      const res = await mcpClient.callTool({
-        name: 'update_order_status',
-        arguments: {
-          order_id: 14,
-          status: 'completed',
-        },
-      });
-
-      assert.equal(res.isError, true);
-      assert.ok(
-        (res.content[0] as { text: string }).text.includes(
-          'Tool "update_order_status" is registered for discovery but not activated in Gate G4. Mutation operations are scheduled for Gate G5.'
-        )
-      );
+    test('update_order_status rejects unapproved status enum over live transport', async () => {
+      try {
+        await mcpClient.callTool({
+          name: 'update_order_status',
+          arguments: {
+            order_id: 14,
+            status: 'refunded',
+          },
+        });
+        assert.fail('Expected protocol rejection for unapproved status');
+      } catch (err: unknown) {
+        assert.ok(err instanceof Error);
+      }
     });
   });
 

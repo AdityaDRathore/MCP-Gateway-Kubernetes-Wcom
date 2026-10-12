@@ -374,4 +374,38 @@ export class WooCommerceClient {
       updated: true,
     };
   }
+
+  // --- Internal / Test Cleanup Helpers (Not exposed as MCP tools) ---
+  async createTestOrder(status = 'pending'): Promise<number> {
+    const raw = await this.execute<WooOrder>({
+      method: 'POST',
+      endpoint: '/orders',
+      body: {
+        status,
+        line_items: [{ product_id: 10, quantity: 1 }],
+      },
+      operation: 'create_test_order',
+    });
+    return raw.id;
+  }
+
+  async deleteProduct(id: number): Promise<void> {
+    await this.execute<WooProduct>({
+      method: 'DELETE',
+      endpoint: `/products/${id}`,
+      queryParams: { force: true },
+      operation: 'delete_product',
+      resourceId: id,
+    });
+  }
+
+  async deleteOrder(id: number): Promise<void> {
+    await this.execute<WooOrder>({
+      method: 'DELETE',
+      endpoint: `/orders/${id}`,
+      queryParams: { force: true },
+      operation: 'delete_order',
+      resourceId: id,
+    });
+  }
 }

@@ -210,5 +210,63 @@ Authorized by Technical Lead to implement and verify exactly the three read tool
 5. **Secret & PII Log Sanitization**:
    - Logs verified during all test runs: zero plaintext consumer secrets, signed URLs, OAuth signatures, or customer PII in structured logs.
 
+---
+
+## 6. Gate G5: Write Tools Implementation & Verification
+
+### Implementation Details
+- **`create_product` Wiring (`apps/woocommerce-mcp/src/tools/index.ts` & `src/woocommerce/client.ts`)**:
+  - Full schema validation with Zod (`CreateProductArgsSchema`):
+    - `sku`: strictly validated with regex `^[A-Za-z0-9-_]+$` (1–64 characters); spaces and invalid characters rejected before dispatch.
+    - `regular_price`: string matching `^\d+(\.\d{1,2})?$`; runtime check strictly enforces decimal parsed as a number greater than 0. Rejects `"0.00"` or negative amounts.
+    - `status`: validated against enum (`draft`, `publish`, `pending`, `private`).
+    - `manage_stock` and `stock_quantity`: constraint strictly enforced where specifying `stock_quantity` requires `manage_stock: true`. If `stock_quantity` is provided with `manage_stock: false` or omitted, the call is rejected immediately before making any upstream request.
+  - Safe concurrency and conflict handling:
+    - Pre-checks SKU existence via `getProductBySku(sku)`. Does not treat pre-check as an atomic guarantee.
+    - Upstream duplicate-SKU conflicts (WooCommerce 400 `product_invalid_sku` / 409) mapped to `ConflictError` / `{ isError: true }` with clear explanation.
+    - Zero automatic retries: `WooCommerceClient.execute` issues exactly one non-retried HTTP POST.
+  - Response projection: output projected through `projectProduct()` returning minimal, model-safe object (`id`, `name`, `sku`, `price`, `regular_price`, `status`, `stock_status`, `categories`). Never returns raw upstream response or internal links.
+- **`update_order_status` Wiring (`apps/woocommerce-mcp/src/tools/index.ts` & `src/woocommerce/client.ts`)**:
+  - Strict input validation:
+    - `order_id`: positive safe integer guard (`z.number().int().positive().safe()` and runtime check `Number.isSafeInteger(order_id) && order_id > 0`). Rejects floats, negative numbers, and zero before upstream calls.
+    - `status`: validated against approved allow-list enum (`pending`, `processing`, `on-hold`, `completed`, `cancelled`, `failed`). Unapproved statuses rejected before upstream calls.
+  - Minimal payload isolation: sends exclusively `{ status }` in PUT payload to WooCommerce REST API; never sends customer notes, addresses, or unrequested order fields.
+  - No-op detection: fetches current order status via `getOrder(orderId)`. If `current.status === status`, returns immediately:
+    `{ id: orderId, previous_status: current.status, status, updated: false }` without issuing an upstream PUT request.
+  - Error mapping: maps nonexistent orders (`NotFoundError` / 404) to `{ isError: true }` with message `"order with ID ... not found in store catalog"`.
+  - Zero automatic retries on PUT requests.
+- **Test Isolation & Order #14 Protection Contract**:
+  - Protected Order #14 is NEVER used for mutation testing.
+  - Dedicated disposable test fixtures:
+    - Products created during live testing use unique disposable SKUs (`URUMI-TEST-G5-${Date.now()}`). Created products are read back, verified, then permanently deleted via `client.deleteProduct()`.
+    - Orders created during live mutation testing use dedicated disposable orders created via internal helper `client.createTestOrder()`. Status mutations are verified, no-op behavior verified, and the disposable order is permanently deleted via `client.deleteOrder()`.
+- **Capability Boundary**:
+  - The application strictly exposes only the approved 5 MCP tools.
+  - The write handlers never accept arbitrary caller-supplied upstream paths or raw API payloads.
+
+### Verification Evidence & Test Results
+1. **Unit Tests (`apps/woocommerce-mcp/test/unit/tools.test.ts` + regression)**:
+   - **Command**: `npm run test:unit --workspace=apps/woocommerce-mcp`
+   - **Result**: 46/46 unit tests passing across 5 test suites.
+   - Tested zero-price rejection, stock_quantity without manage_stock rejection, duplicate-SKU ConflictError mapping, float order ID rejection, negative order ID rejection, no-op status mutation detection, and 404 order mapping.
+2. **MCP Protocol Transport Tests (`apps/woocommerce-mcp/test/protocol/write-tools.test.ts` + `read-tools.test.ts` + `handshake.test.ts`)**:
+   - **Command**: `npm run test:protocol --workspace=apps/woocommerce-mcp`
+   - **Result**: 35/35 checks passing over Streamable HTTP transport (`POST /mcp`).
+   - Verified valid execution and response projections of `create_product` and `update_order_status` over protocol.
+   - Verified pre-call rejection of invalid SKUs, non-decimal prices, zero price, stock constraints, unapproved status enums, negative order IDs, and float order IDs.
+   - Verified protocol mapping of duplicate-SKU conflict, 404 not found, and upstream network errors to clean `isError: true` responses.
+3. **Live WooCommerce Store Integration Tests (`apps/woocommerce-mcp/test/integration/write-tools.live.test.ts` + `read-tools.live.test.ts` + `client.live.test.ts`)**:
+   - **Command**: `npm run test:integration --workspace=apps/woocommerce-mcp`
+   - **Result**: 39/39 tests passing sequentially against live WordPress/WooCommerce cluster.
+   - `create_product`: created disposable product `URUMI-TEST-G5-...` (₹249.99), verified minimal response projection, read back persisted state from database, verified duplicate SKU conflict rejection (409), permanently deleted product and confirmed readback returns `null`.
+   - `update_order_status`: created disposable test order (ID 34), mutated status from `pending` to `on-hold`, verified persisted database state via readback, verified no-op detection on repeated `on-hold` call (`updated: false`), verified nonexistent order 404 mapping, permanently deleted disposable order and confirmed 404 on readback.
+   - Verified that protected Order #14 was NEVER touched and remained untouched throughout all tests.
+   - Verified that seeded products (10, 11, 12) remained completely untouched.
+   - Verified that tool outputs contain zero consumer secrets, API keys, OAuth signatures, or customer PII.
+4. **Post-Test Store Baseline Audit via WP-CLI**:
+   - Products query (`wp post list --post_type=product`): exactly 3 products present (10, 11, 12); 0 temporary products left behind.
+   - Orders query (`wp wc shop_order list`): exactly 1 order present (Order #14 in `processing` status, ₹299.00); 0 temporary orders left behind.
+
+
 
 

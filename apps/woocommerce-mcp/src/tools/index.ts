@@ -64,23 +64,69 @@ export function registerAllTools(server: McpServer, client?: WooCommerceClient):
     }
   );
 
-  // 2. create_product (Write Tool — Registered for discovery; implementation scheduled for Gate G5)
+  // 2. create_product (Write Tool — Implemented in G5)
   server.registerTool(
     'create_product',
     {
       description: 'Create a simple product in the store catalog with strict field validation and duplicate SKU prevention.',
       inputSchema: CreateProductInputShape,
     },
-    async () => {
-      return {
-        isError: true,
-        content: [
-          {
-            type: 'text',
-            text: 'Tool "create_product" is registered for discovery but not activated in Gate G4. Mutation operations are scheduled for Gate G5.',
-          },
-        ],
-      };
+    async (args) => {
+      // Validate positive decimal price
+      const priceNum = parseFloat(args.regular_price);
+      if (isNaN(priceNum) || priceNum <= 0) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Validation error: "regular_price" must be a positive decimal greater than zero.' }],
+        };
+      }
+
+      // Validate stock constraint: stock_quantity requires manage_stock=true
+      if (args.stock_quantity !== undefined && !args.manage_stock) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Validation error: "stock_quantity" requires "manage_stock" to be true.' }],
+        };
+      }
+
+      if (!client) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'WooCommerce API client is not configured.' }],
+        };
+      }
+
+      try {
+        const product = await client.createProduct({
+          name: args.name,
+          sku: args.sku,
+          regular_price: args.regular_price,
+          description: args.description,
+          status: args.status,
+          manage_stock: args.manage_stock,
+          stock_quantity: args.stock_quantity,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(product, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Error creating product "${args.sku}": ${message}`,
+            },
+          ],
+        };
+      }
     }
   );
 
@@ -211,23 +257,51 @@ export function registerAllTools(server: McpServer, client?: WooCommerceClient):
     }
   );
 
-  // 5. update_order_status (Write Tool — Registered for discovery; implementation scheduled for Gate G5)
+  // 5. update_order_status (Write Tool — Implemented in G5)
   server.registerTool(
     'update_order_status',
     {
       description: 'Update the fulfillment status of an order using an approved allow-list (pending, processing, on-hold, completed, cancelled, failed).',
       inputSchema: UpdateOrderStatusInputShape,
     },
-    async () => {
-      return {
-        isError: true,
-        content: [
-          {
-            type: 'text',
-            text: 'Tool "update_order_status" is registered for discovery but not activated in Gate G4. Mutation operations are scheduled for Gate G5.',
-          },
-        ],
-      };
+    async (args) => {
+      // Validate positive safe integer order ID
+      if (!Number.isSafeInteger(args.order_id) || args.order_id <= 0) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Validation error: "order_id" must be a positive integer.' }],
+        };
+      }
+
+      if (!client) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'WooCommerce API client is not configured.' }],
+        };
+      }
+
+      try {
+        const result = await client.updateOrderStatus(args.order_id, args.status);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Error updating order ${args.order_id} status to "${args.status}": ${message}`,
+            },
+          ],
+        };
+      }
     }
   );
 }

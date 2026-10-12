@@ -419,38 +419,223 @@ describe('Gate G4 Read Tools Unit & Contract Tests', () => {
     });
   });
 
-  // --- 5. Unactivated Write Tools Contract (Gate G4 Boundary) ---
-  describe('Gate G4 Boundary — Write Tools Inactivation', () => {
-    test('create_product returns isError with explicit Gate G5 deferral message', async () => {
-      const handlers = getRegisteredHandlers();
-      const res = await handlers.create_product.handler({
-        name: 'Disposable Mug',
-        sku: 'TEST-MUG',
-        regular_price: '199.00',
-        status: 'draft',
+  // --- 5. Gate G5 Write Tools Handler Unit Tests ---
+  describe('Gate G5 Write Tools Handlers', () => {
+    describe('create_product Handler', () => {
+      test('successfully creates product and returns projected summary', async () => {
+        let capturedPayload: unknown;
+        const mockClient = {
+          createProduct: async (payload: unknown) => {
+            capturedPayload = payload;
+            return dummyProduct;
+          },
+        } as unknown as WooCommerceClient;
+
+        const handlers = getRegisteredHandlers(mockClient);
+        const res = await handlers.create_product.handler({
+          name: 'Urumi Test Mug',
+          sku: 'URUMI-MUG-001',
+          regular_price: '299.00',
+          status: 'publish',
+          description: 'Official Urumi ceramic coffee mug.',
+          manage_stock: true,
+          stock_quantity: 50,
+        });
+
+        assert.equal(res.isError, undefined);
+        const product = JSON.parse(res.content[0].text);
+        assert.equal(product.sku, 'URUMI-MUG-001');
+        assert.deepEqual(capturedPayload, {
+          name: 'Urumi Test Mug',
+          sku: 'URUMI-MUG-001',
+          regular_price: '299.00',
+          status: 'publish',
+          description: 'Official Urumi ceramic coffee mug.',
+          manage_stock: true,
+          stock_quantity: 50,
+        });
       });
 
-      assert.equal(res.isError, true);
-      assert.ok(
-        res.content[0].text.includes(
-          'Tool "create_product" is registered for discovery but not activated in Gate G4. Mutation operations are scheduled for Gate G5.'
-        )
-      );
+      test('rejects zero or negative regular_price before calling client', async () => {
+        let clientCalled = false;
+        const mockClient = {
+          createProduct: async () => {
+            clientCalled = true;
+            return dummyProduct;
+          },
+        } as unknown as WooCommerceClient;
+
+        const handlers = getRegisteredHandlers(mockClient);
+        const res = await handlers.create_product.handler({
+          name: 'Free Mug',
+          sku: 'FREE-MUG',
+          regular_price: '0.00',
+        });
+
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('Validation error: "regular_price" must be a positive decimal greater than zero'));
+        assert.equal(clientCalled, false);
+      });
+
+      test('rejects stock_quantity without manage_stock before calling client', async () => {
+        let clientCalled = false;
+        const mockClient = {
+          createProduct: async () => {
+            clientCalled = true;
+            return dummyProduct;
+          },
+        } as unknown as WooCommerceClient;
+
+        const handlers = getRegisteredHandlers(mockClient);
+        const res = await handlers.create_product.handler({
+          name: 'Stock Mug',
+          sku: 'STOCK-MUG',
+          regular_price: '199.00',
+          manage_stock: false,
+          stock_quantity: 10,
+        });
+
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('Validation error: "stock_quantity" requires "manage_stock" to be true'));
+        assert.equal(clientCalled, false);
+      });
+
+      test('maps duplicate SKU ConflictError to isError response', async () => {
+        const mockClient = {
+          createProduct: async () => {
+            throw new (await import('../../src/woocommerce/errors.js')).ConflictError(
+              'Product with SKU "URUMI-MUG-001" already exists.'
+            );
+          },
+        } as unknown as WooCommerceClient;
+
+        const handlers = getRegisteredHandlers(mockClient);
+        const res = await handlers.create_product.handler({
+          name: 'Duplicate Mug',
+          sku: 'URUMI-MUG-001',
+          regular_price: '299.00',
+        });
+
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('Product with SKU "URUMI-MUG-001" already exists'));
+      });
+
+      test('returns error when client is unconfigured', async () => {
+        const handlers = getRegisteredHandlers(undefined);
+        const res = await handlers.create_product.handler({
+          name: 'Mug',
+          sku: 'MUG',
+          regular_price: '10.00',
+        });
+
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('WooCommerce API client is not configured'));
+      });
     });
 
-    test('update_order_status returns isError with explicit Gate G5 deferral message', async () => {
-      const handlers = getRegisteredHandlers();
-      const res = await handlers.update_order_status.handler({
-        order_id: 14,
-        status: 'completed',
+    describe('update_order_status Handler', () => {
+      test('successfully updates order status and returns mutation result', async () => {
+        let capturedArgs: unknown;
+        const mockClient = {
+          updateOrderStatus: async (id: number, status: string) => {
+            capturedArgs = { id, status };
+            return {
+              id,
+              previous_status: 'pending',
+              status,
+              updated: true,
+            };
+          },
+        } as unknown as WooCommerceClient;
+
+        const handlers = getRegisteredHandlers(mockClient);
+        const res = await handlers.update_order_status.handler({
+          order_id: 14,
+          status: 'completed',
+        });
+
+        assert.equal(res.isError, undefined);
+        const result = JSON.parse(res.content[0].text);
+        assert.equal(result.id, 14);
+        assert.equal(result.previous_status, 'pending');
+        assert.equal(result.status, 'completed');
+        assert.equal(result.updated, true);
+        assert.deepEqual(capturedArgs, { id: 14, status: 'completed' });
       });
 
-      assert.equal(res.isError, true);
-      assert.ok(
-        res.content[0].text.includes(
-          'Tool "update_order_status" is registered for discovery but not activated in Gate G4. Mutation operations are scheduled for Gate G5.'
-        )
-      );
+      test('detects already-matching status as no-op (updated: false)', async () => {
+        const mockClient = {
+          updateOrderStatus: async (id: number, status: string) => {
+            return {
+              id,
+              previous_status: status,
+              status,
+              updated: false,
+            };
+          },
+        } as unknown as WooCommerceClient;
+
+        const handlers = getRegisteredHandlers(mockClient);
+        const res = await handlers.update_order_status.handler({
+          order_id: 14,
+          status: 'processing',
+        });
+
+        assert.equal(res.isError, undefined);
+        const result = JSON.parse(res.content[0].text);
+        assert.equal(result.id, 14);
+        assert.equal(result.previous_status, 'processing');
+        assert.equal(result.status, 'processing');
+        assert.equal(result.updated, false);
+      });
+
+      test('rejects negative or non-safe integer order_id before calling client', async () => {
+        let clientCalled = false;
+        const mockClient = {
+          updateOrderStatus: async () => {
+            clientCalled = true;
+            return { id: 14, previous_status: 'pending', status: 'completed', updated: true };
+          },
+        } as unknown as WooCommerceClient;
+
+        const handlers = getRegisteredHandlers(mockClient);
+        const res = await handlers.update_order_status.handler({
+          order_id: -1,
+          status: 'completed',
+        });
+
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('Validation error: "order_id" must be a positive integer'));
+        assert.equal(clientCalled, false);
+      });
+
+      test('maps NotFoundError for nonexistent order to descriptive error message', async () => {
+        const mockClient = {
+          updateOrderStatus: async (id: number) => {
+            throw new NotFoundError('order', id);
+          },
+        } as unknown as WooCommerceClient;
+
+        const handlers = getRegisteredHandlers(mockClient);
+        const res = await handlers.update_order_status.handler({
+          order_id: 999999,
+          status: 'completed',
+        });
+
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('Error updating order 999999 status to "completed": order with ID 999999 not found in store catalog.'));
+      });
+
+      test('returns error when client is unconfigured', async () => {
+        const handlers = getRegisteredHandlers(undefined);
+        const res = await handlers.update_order_status.handler({
+          order_id: 14,
+          status: 'completed',
+        });
+
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('WooCommerce API client is not configured'));
+      });
     });
   });
 });

@@ -89,6 +89,14 @@ describe('Gate G4 Read Tools MCP Protocol Test Suite', () => {
       }
       return mockOrder;
     },
+    createProduct: async (payload: unknown) => {
+      clientMethodCallCount++;
+      return mockProduct;
+    },
+    updateOrderStatus: async (id: number, status: string) => {
+      clientMethodCallCount++;
+      return { id, previous_status: 'pending', status, updated: true };
+    },
   } as unknown as WooCommerceClient;
 
   const testConfig: AppConfig = {
@@ -146,27 +154,24 @@ describe('Gate G4 Read Tools MCP Protocol Test Suite', () => {
     );
   });
 
-  // --- 2. Gate G4 Inactivation of Write Tools ---
-  test('2. Protocol call to create_product returns isError with Gate G5 deferral message', async () => {
+  // --- 2. Protocol Invocations of Write Tools ---
+  test('2. Protocol call to create_product succeeds and returns projected product', async () => {
     const res = await mcpClient.callTool({
       name: 'create_product',
       arguments: {
-        name: 'G4 Test Product',
-        sku: 'TEST-SKU-G4',
+        name: 'G5 Test Product',
+        sku: 'TEST-SKU-G5',
         regular_price: '499.00',
         status: 'draft',
       },
     });
 
-    assert.equal(res.isError, true);
-    assert.ok(
-      (res.content[0] as { text: string }).text.includes(
-        'Tool "create_product" is registered for discovery but not activated in Gate G4. Mutation operations are scheduled for Gate G5.'
-      )
-    );
+    assert.equal(res.isError, undefined);
+    const product = JSON.parse((res.content[0] as { text: string }).text);
+    assert.equal(product.sku, 'URUMI-MUG-001');
   });
 
-  test('3. Protocol call to update_order_status returns isError with Gate G5 deferral message', async () => {
+  test('3. Protocol call to update_order_status succeeds and returns mutation result', async () => {
     const res = await mcpClient.callTool({
       name: 'update_order_status',
       arguments: {
@@ -175,12 +180,11 @@ describe('Gate G4 Read Tools MCP Protocol Test Suite', () => {
       },
     });
 
-    assert.equal(res.isError, true);
-    assert.ok(
-      (res.content[0] as { text: string }).text.includes(
-        'Tool "update_order_status" is registered for discovery but not activated in Gate G4. Mutation operations are scheduled for Gate G5.'
-      )
-    );
+    assert.equal(res.isError, undefined);
+    const result = JSON.parse((res.content[0] as { text: string }).text);
+    assert.equal(result.id, 14);
+    assert.equal(result.status, 'completed');
+    assert.equal(result.updated, true);
   });
 
   // --- 3. list_products Protocol Invocations ---
