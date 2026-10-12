@@ -15,21 +15,21 @@ store:
   wordpress:
     resources:
       requests:
-        cpu: "50m"
-        memory: "128Mi"
+        cpu: "100m"
+        memory: "192Mi"
       limits:
-        cpu: "300m"
-        memory: "256Mi"
+        cpu: "500m"
+        memory: "384Mi"
     persistence:
       storageClass: "local-path"
   mariadb:
     resources:
       requests:
-        cpu: "50m"
-        memory: "96Mi"
+        cpu: "100m"
+        memory: "128Mi"
       limits:
-        cpu: "300m"
-        memory: "256Mi"
+        cpu: "500m"
+        memory: "384Mi"
     persistence:
       storageClass: "local-path"
 

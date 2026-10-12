@@ -1,0 +1,77 @@
+{{- if .Values.store.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: urumi-wordpress
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wordpress
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: wordpress
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: wordpress
+    spec:
+      containers:
+        - name: wordpress
+          image: {{ .Values.store.wordpress.image | default "wordpress:7.1.3-php8.3-apache" | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+              protocol: TCP
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: "urumi-mariadb:3306"
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.store.mariadb.database | default "wordpress" | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.store.mariadb.user | default "wordpress_user" | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: urumi-store-secrets
+                  key: mariadb-password
+          volumeMounts:
+            - name: wordpress-data
+              mountPath: /var/www/html
+          startupProbe:
+            httpGet:
+              path: /wp-login.php
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /wp-login.php
+              port: 80
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 80
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          {{- if .Values.store.wordpress.resources }}
+          resources:
+            {{- toYaml .Values.store.wordpress.resources | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: wordpress-data
+          persistentVolumeClaim:
+            claimName: urumi-wordpress-pvc
+{{- end }}

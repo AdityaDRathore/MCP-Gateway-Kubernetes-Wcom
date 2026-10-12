@@ -1,0 +1,18 @@
+{{- if and .Values.store.enabled .Values.store.mariadb.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: urumi-mariadb-pvc
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.store.mariadb.persistence.storageClass }}
+  storageClassName: {{ .Values.store.mariadb.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.store.mariadb.persistence.size | default "1Gi" | quote }}
+{{- end }}

@@ -1,0 +1,32 @@
+{{- if .Values.store.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: urumi-store-ingress
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storefront
+  {{- if and .Values.ingress.tls .Values.ingress.tls.enabled .Values.ingress.tls.certManagerIssuer }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.certManagerIssuer | quote }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | default "traefik" | quote }}
+  {{- if and .Values.ingress.tls .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.store.domain | quote }}
+      secretName: {{ printf "%s-tls" .Values.store.domain | replace "." "-" }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.store.domain | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: urumi-wordpress
+                port:
+                  number: 80
+{{- end }}

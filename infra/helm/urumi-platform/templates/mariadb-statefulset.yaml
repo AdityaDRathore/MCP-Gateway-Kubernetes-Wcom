@@ -1,0 +1,84 @@
+{{- if .Values.store.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: urumi-mariadb
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  serviceName: urumi-mariadb
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mariadb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: mariadb
+    spec:
+      containers:
+        - name: mariadb
+          image: {{ .Values.store.mariadb.image | default "mariadb:11.4.5" | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3306
+              name: mysql
+              protocol: TCP
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: urumi-store-secrets
+                  key: mariadb-root-password
+            - name: MARIADB_DATABASE
+              value: {{ .Values.store.mariadb.database | default "wordpress" | quote }}
+            - name: MARIADB_USER
+              value: {{ .Values.store.mariadb.user | default "wordpress_user" | quote }}
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: urumi-store-secrets
+                  key: mariadb-password
+          volumeMounts:
+            - name: mariadb-data
+              mountPath: /var/lib/mysql
+          startupProbe:
+            exec:
+              command:
+                - /usr/local/bin/healthcheck.sh
+                - --connect
+                - --innodb_initialized
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command:
+                - /usr/local/bin/healthcheck.sh
+                - --connect
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - /usr/local/bin/healthcheck.sh
+                - --connect
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          {{- if .Values.store.mariadb.resources }}
+          resources:
+            {{- toYaml .Values.store.mariadb.resources | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: mariadb-data
+          persistentVolumeClaim:
+            claimName: urumi-mariadb-pvc
+{{- end }}
