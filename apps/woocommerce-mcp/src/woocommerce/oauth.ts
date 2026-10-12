@@ -8,11 +8,23 @@ export function rfc3986(str: string): string {
   return encodeURIComponent(str).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
+/**
+ * Strict byte-value (ASCII code point / octet) comparator per RFC 5849 Section 3.4.1.3.2.
+ * Never uses localeCompare, preventing locale-dependent ordering discrepancies across host environments.
+ */
+export function rfc5849ByteComparator(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+export type QueryParamValue = string | number | boolean | (string | number | boolean)[];
+export type QueryParamsInput = Record<string, QueryParamValue | undefined> | [string, string | number | boolean][];
+
 export interface OAuthSignOptions {
   method: string;
   transportBaseUrl: string; // Internal cluster URL, e.g. "http://urumi-wordpress.urumi.svc.cluster.local:80/wp-json/wc/v3/products"
   signatureBaseUrl: string; // Configured store URL, e.g. "http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products"
-  queryParams?: Record<string, string | number | boolean | undefined>;
+  queryParams?: QueryParamsInput;
   consumerKey: string;
   consumerSecret: string;
   timestamp?: string;
@@ -47,56 +59,82 @@ export function signOAuth1Request(options: OAuthSignOptions): OAuthSignResult {
     nonce = crypto.randomBytes(16).toString('hex'),
   } = options;
 
-  // Filter out undefined query parameters and stringify
-  const cleanQueryParams: Record<string, string> = {};
-  for (const [key, value] of Object.entries(queryParams)) {
-    if (value !== undefined && value !== null) {
-      cleanQueryParams[key] = String(value);
+  const paramPairs: { encodedKey: string; encodedValue: string }[] = [];
+
+  // 1. Collect and percent-encode query parameters (RFC 5849 Section 3.4.1.3.2 step 1)
+  if (Array.isArray(queryParams)) {
+    for (const [key, value] of queryParams) {
+      if (value !== undefined && value !== null) {
+        paramPairs.push({
+          encodedKey: rfc3986(key),
+          encodedValue: rfc3986(String(value)),
+        });
+      }
+    }
+  } else if (queryParams && typeof queryParams === 'object') {
+    for (const [key, value] of Object.entries(queryParams)) {
+      if (value === undefined || value === null) continue;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item !== undefined && item !== null) {
+            paramPairs.push({
+              encodedKey: rfc3986(key),
+              encodedValue: rfc3986(String(item)),
+            });
+          }
+        }
+      } else {
+        paramPairs.push({
+          encodedKey: rfc3986(key),
+          encodedValue: rfc3986(String(value)),
+        });
+      }
     }
   }
 
-  // Mandatory OAuth 1.0a parameters
-  const oauthParams: Record<string, string> = {
-    oauth_consumer_key: consumerKey,
-    oauth_nonce: nonce,
-    oauth_signature_method: 'HMAC-SHA256',
-    oauth_timestamp: timestamp,
-  };
+  // 2. Add and percent-encode mandatory OAuth 1.0a parameters
+  paramPairs.push(
+    { encodedKey: rfc3986('oauth_consumer_key'), encodedValue: rfc3986(consumerKey) },
+    { encodedKey: rfc3986('oauth_nonce'), encodedValue: rfc3986(nonce) },
+    { encodedKey: rfc3986('oauth_signature_method'), encodedValue: rfc3986('HMAC-SHA256') },
+    { encodedKey: rfc3986('oauth_timestamp'), encodedValue: rfc3986(timestamp) }
+  );
 
-  // Combine query parameters and oauth parameters for signing (excluding oauth_signature)
-  const allParams = { ...cleanQueryParams, ...oauthParams };
+  // 3. Sort pairs strictly by encodedKey, then encodedValue per RFC 5849 Section 3.4.1.3.2 step 2
+  paramPairs.sort((a, b) => {
+    const keyComp = rfc5849ByteComparator(a.encodedKey, b.encodedKey);
+    if (keyComp !== 0) return keyComp;
+    return rfc5849ByteComparator(a.encodedValue, b.encodedValue);
+  });
 
-  // Sort keys lexicographically according to RFC 5849 Section 3.4.1.3.2
-  const sortedKeys = Object.keys(allParams).sort((a, b) => a.localeCompare(b));
-
-  // Format parameter string: encodedKey=encodedValue joined by '&'
-  const normalizedPairs = sortedKeys.map((k) => `${rfc3986(k)}=${rfc3986(allParams[k])}`);
+  // 4. Concatenate sorted parameters into normalized query string
+  const normalizedPairs = paramPairs.map((p) => `${p.encodedKey}=${p.encodedValue}`);
   const normalizedQueryString = normalizedPairs.join('&');
 
-  // Construct signature base string: METHOD & urlencode(BaseURI) & urlencode(NormalizedQueryString)
+  // 5. Construct signature base string: METHOD & urlencode(BaseURI) & urlencode(NormalizedQueryString)
   const stringToSign = `${method.toUpperCase()}&${rfc3986(signatureBaseUrl)}&${rfc3986(normalizedQueryString)}`;
 
-  // Signing key is urlencode(consumer_secret) + '&' (one-legged OAuth has no token secret)
+  // 6. Signing key is urlencode(consumer_secret) + '&' (one-legged OAuth has no token secret)
   const signingKey = `${rfc3986(consumerSecret)}&`;
   const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('base64');
 
-  // Final query parameters include oauth_signature
-  const finalParams: Record<string, string> = {
-    ...allParams,
-    oauth_signature: signature,
-  };
-
-  const finalQueryString = Object.keys(finalParams)
-    .map((k) => `${rfc3986(k)}=${rfc3986(finalParams[k])}`)
-    .join('&');
+  // 7. Assemble final query string with oauth_signature
+  const finalPairs = [...paramPairs, { encodedKey: rfc3986('oauth_signature'), encodedValue: rfc3986(signature) }];
+  const finalQueryString = finalPairs.map((p) => `${p.encodedKey}=${p.encodedValue}`).join('&');
 
   const delimiter = transportBaseUrl.includes('?') ? '&' : '?';
   const requestUrl = `${transportBaseUrl}${delimiter}${finalQueryString}`;
 
+  // Assemble map of signed parameters for inspection
+  const signedParams: Record<string, string> = {};
+  for (const p of finalPairs) {
+    signedParams[p.encodedKey] = p.encodedValue;
+  }
+
   return {
     requestUrl,
     signature,
-    signedParams: finalParams,
+    signedParams,
     stringToSign,
   };
 }

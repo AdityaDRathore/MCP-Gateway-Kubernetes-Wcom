@@ -1,6 +1,6 @@
 /**
  * Structured, Redacted JSON Logger for Urumi WooCommerce MCP Server.
- * Guarantees zero credential, signature, and customer PII leakage to stdout/stderr.
+ * Guarantees zero credential, signature, signed URL, and customer PII leakage to stdout/stderr.
  */
 
 const SENSITIVE_KEY_PATTERNS = [
@@ -23,6 +23,41 @@ const SENSITIVE_KEY_PATTERNS = [
 ];
 
 /**
+ * Sanitizes URLs, OAuth parameters, tokens, and customer identifiers embedded within strings.
+ */
+export function sanitizeString(data: string): string {
+  let sanitized = data;
+
+  // Redact authorization header strings
+  if (sanitized.toLowerCase().startsWith('bearer ') || sanitized.toLowerCase().startsWith('basic ')) {
+    return '[REDACTED_AUTH_HEADER]';
+  }
+
+  // Redact sensitive query parameters and signed URLs
+  if (
+    sanitized.includes('oauth_') ||
+    sanitized.includes('consumer_secret') ||
+    sanitized.includes('consumer_key') ||
+    sanitized.includes('consumer-secret') ||
+    sanitized.includes('consumer-key')
+  ) {
+    sanitized = sanitized
+      .replace(/oauth_signature=[^&\s]+/gi, 'oauth_signature=[REDACTED]')
+      .replace(/oauth_consumer_key=[^&\s]+/gi, 'oauth_consumer_key=[REDACTED]')
+      .replace(/oauth_nonce=[^&\s]+/gi, 'oauth_nonce=[REDACTED]')
+      .replace(/consumer_secret=[^&\s]+/gi, 'consumer_secret=[REDACTED]')
+      .replace(/consumer_key=[^&\s]+/gi, 'consumer_key=[REDACTED]')
+      .replace(/consumer-secret=[^&\s]+/gi, 'consumer-secret=[REDACTED]')
+      .replace(/consumer-key=[^&\s]+/gi, 'consumer-key=[REDACTED]');
+  }
+
+  // Redact customer emails embedded in strings
+  sanitized = sanitized.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b/g, '[REDACTED_EMAIL]');
+
+  return sanitized;
+}
+
+/**
  * Recursively redacts sensitive keys from an object or value.
  */
 export function redactSensitiveData(data: unknown): unknown {
@@ -31,11 +66,7 @@ export function redactSensitiveData(data: unknown): unknown {
   }
 
   if (typeof data === 'string') {
-    // Redact basic auth or bearer tokens in strings
-    if (data.toLowerCase().startsWith('bearer ') || data.toLowerCase().startsWith('basic ')) {
-      return '[REDACTED_AUTH_HEADER]';
-    }
-    return data;
+    return sanitizeString(data);
   }
 
   if (Array.isArray(data)) {
@@ -45,7 +76,7 @@ export function redactSensitiveData(data: unknown): unknown {
   if (typeof data === 'object') {
     const sanitized: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-      const isSensitive = SENSITIVE_KEY_PATTERNS.some(pattern => pattern.test(key));
+      const isSensitive = SENSITIVE_KEY_PATTERNS.some((pattern) => pattern.test(key));
       if (isSensitive) {
         sanitized[key] = '[REDACTED]';
       } else {
@@ -73,11 +104,12 @@ class Logger {
   private service = 'urumi-woocommerce-mcp';
 
   private log(level: LogEntry['level'], message: string, meta?: Record<string, unknown>): void {
+    const sanitizedMessage = sanitizeString(message);
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       level,
       service: this.service,
-      message,
+      message: sanitizedMessage,
       ...(meta ? (redactSensitiveData(meta) as Record<string, unknown>) : {}),
     };
 

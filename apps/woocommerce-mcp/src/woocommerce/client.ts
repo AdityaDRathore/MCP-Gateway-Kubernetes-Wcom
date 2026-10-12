@@ -23,7 +23,7 @@ import {
   projectProduct,
   projectOrder,
 } from './mappers.js';
-import { logger } from '../logging/logger.js';
+import { logger, sanitizeString } from '../logging/logger.js';
 
 const MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MiB hard ceiling
 
@@ -224,13 +224,14 @@ export class WooCommerceClient {
         throw err;
       }
 
-      const message = err instanceof Error ? err.message : String(err);
+      const rawMessage = err instanceof Error ? err.message : String(err);
+      const sanitizedMessage = sanitizeString(rawMessage);
       logger.error('Network or system error during WooCommerce request', {
         operation,
-        error: message,
+        error: sanitizedMessage,
         durationMs,
       });
-      throw new WooCommerceError(`Network request to WooCommerce failed: ${message}`, 502, 'BAD_GATEWAY');
+      throw new WooCommerceError(`Network request to WooCommerce failed: ${sanitizedMessage}`, 502, 'BAD_GATEWAY');
     }
   }
 

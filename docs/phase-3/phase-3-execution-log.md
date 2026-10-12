@@ -122,3 +122,30 @@
     - Seeded products intact: ID 10 (`URUMI-MUG-001`), ID 11 (`URUMI-MOUSE-001`), ID 12 (`URUMI-NOTE-001`).
     - Order #14 intact: status `processing`, INR 299.00. Zero extraneous records in store catalog.
 
+### 4.1 Gate G3 Focused Checks & Full Acceptance Verification
+- **Status:** PASS (Fully Accepted)
+- **Date:** 2026-10-12
+- **Activities:**
+  - Refactored OAuth parameter comparator in `apps/woocommerce-mcp/src/woocommerce/oauth.ts`:
+    - Replaced locale-dependent string sorting with explicit RFC 5849 byte-value comparator (`rfc5849ByteComparator`): `a < b ? -1 : (a > b ? 1 : 0)`.
+    - Handled duplicate parameter keys by sorting secondary on percent-encoded values per RFC 5849 Section 3.4.1.3.2.
+    - Added deterministic unit tests in `apps/woocommerce-mcp/test/unit/oauth.test.ts` for byte comparator, duplicate parameter keys, spaces, reserved characters (`!`, `'`, `(`, `)`, `*`, `&`, `=`), and multi-byte UTF-8 sequences (accents, Indian Rupee `₹`, Hindi text, emoji).
+  - Hardened log sanitization in `apps/woocommerce-mcp/src/logging/logger.ts` and `apps/woocommerce-mcp/src/woocommerce/client.ts`:
+    - Implemented `sanitizeString` to scrub signed URLs, query parameters, OAuth signatures (`oauth_signature=[REDACTED]`), consumer keys (`oauth_consumer_key=[REDACTED]`), nonces, consumer secrets, auth headers, and customer emails.
+    - Wrapped network error messages in `client.ts` through `sanitizeString` before logging and throwing.
+    - Created dedicated unit test suite `apps/woocommerce-mcp/test/unit/logger.test.ts` (3/3 tests passing) proving full URL scrubbing and recursive metadata redaction.
+  - Documented effective permissions and threat model for `urumi-mcp-integration`:
+    - WooCommerce core REST API supports only coarse `read`, `write`, `read_write` scopes and lacks sub-resource or per-endpoint scoping.
+    - Service account user ID 2 (`urumi-mcp-integration`) possesses role `shop_manager` (permitting product and order management while denying WordPress administrator rights like `manage_options` or plugin/theme editing).
+    - The MCP server application layer acts as the authoritative least-privilege enforcement boundary: exposing strictly the five approved tools and executing zero deletion, refund, or configuration mutations.
+  - Preserved Kubernetes private boundary & NetworkPolicy requirements:
+    - Reaffirmed that `ClusterIP` alone provides neither caller authorization nor transport encryption; in-cluster HTTP traffic remains unencrypted.
+    - Documented invariant that private endpoint reachability and NetworkPolicy enforcement (restricting pod-to-pod traffic to Gateway -> WooCommerce MCP -> WordPress) will be implemented and validated during Gates G6 and G7.
+  - Full Regression Verification:
+    - Unit Tests: 20/20 passed across 4 test suites (`oauth.test.ts`, `errors.test.ts`, `mappers.test.ts`, `logger.test.ts`).
+    - Protocol Tests: 5/5 passed (`handshake.test.ts`).
+    - Live Integration Tests: 12/12 passed against live store (`client.live.test.ts`).
+    - TypeScript compilation: 0 errors via `npm run typecheck` and `npm run build`.
+    - Baseline Store Preservation: WP-CLI query confirms products 10, 11, 12 and Order #14 are 100% intact.
+
+
