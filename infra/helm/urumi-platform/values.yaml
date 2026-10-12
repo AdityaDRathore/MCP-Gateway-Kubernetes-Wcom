@@ -66,7 +66,7 @@ upstreams:
   woocommerce:
     enabled: true
     image: "urumi-woocommerce-mcp:1.0.0"
-    digest: "sha256:989be8eec69408fdf10114b3dc4695771936f306b9ad7ccff09fff0a07c9f9a1"
+    digest: ""
     imagePullPolicy: "IfNotPresent"
     replicas: 1
     service:
@@ -121,4 +121,5 @@ upstreams:
 
 networkPolicy:
   enabled: true
+  allowTestClient: false
 

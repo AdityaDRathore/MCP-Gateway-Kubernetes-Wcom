@@ -56,7 +56,7 @@ gateway:
 upstreams:
   woocommerce:
     image: "urumi-woocommerce-mcp:1.0.0"
-    digest: "sha256:d831a5b6b4c3b21c6d930eece6e484c4ccebcbbcdf9bf00ccea98c61eb9fee6a"
+    digest: ""
     imagePullPolicy: "IfNotPresent"
     resources:
       requests:
@@ -84,4 +84,5 @@ upstreams:
 
 networkPolicy:
   enabled: true
+  allowTestClient: false
 

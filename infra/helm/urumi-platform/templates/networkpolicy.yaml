@@ -16,14 +16,17 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow incoming MCP traffic only from intended gateway workloads and authorized test runners
+    # Allow incoming MCP traffic only from intended gateway workloads
     - from:
         - podSelector:
             matchLabels:
               app.kubernetes.io/component: gateway
+        {{- if .Values.networkPolicy.allowTestClient }}
+        # Explicitly local-only exception for development verification
         - podSelector:
             matchLabels:
               app.kubernetes.io/component: test-client
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.upstreams.woocommerce.service.port | default 3000 }}
@@ -85,7 +88,8 @@ spec:
       ports:
         - protocol: TCP
           port: 80
-    # 3. Allow authorized in-cluster test and administrative diagnostic clients
+    {{- if .Values.networkPolicy.allowTestClient }}
+    # 3. Allow in-cluster test and diagnostic clients (explicitly local-only)
     - from:
         - podSelector:
             matchLabels:
@@ -93,6 +97,7 @@ spec:
       ports:
         - protocol: TCP
           port: 80
+    {{- end }}
   egress:
     # Allow egress to MariaDB database on port 3306
     - to:
