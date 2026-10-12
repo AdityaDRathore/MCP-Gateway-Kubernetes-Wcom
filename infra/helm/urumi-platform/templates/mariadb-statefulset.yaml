@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
         - name: mariadb
-          image: {{ .Values.store.mariadb.image | default "mariadb:11.4.5" | quote }}
+          image: {{ if .Values.store.mariadb.digest }}{{ printf "%s@%s" .Values.store.mariadb.image .Values.store.mariadb.digest | quote }}{{ else }}{{ .Values.store.mariadb.image | default "mariadb:11.4.5" | quote }}{{ end }}
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3306

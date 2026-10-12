@@ -16,10 +16,10 @@ store:
     resources:
       requests:
         cpu: "100m"
-        memory: "192Mi"
+        memory: "256Mi"
       limits:
         cpu: "500m"
-        memory: "384Mi"
+        memory: "512Mi"
     persistence:
       storageClass: "local-path"
   mariadb:
