@@ -71,3 +71,54 @@
     - Test 4: Valid tool execution via protocol succeeded.
     - Test 5: Invalid inputs (negative ID, unapproved status, missing fields, unknown tool) rejected safely by schema.
     - Verdict: 5/5 tests passed.
+
+---
+
+## 4. Gate G3 — Authenticated WooCommerce API Client Implementation & Verification
+- **Status:** PASS
+- **Date:** 2026-10-12
+- **Activities:**
+  - Implemented OAuth 1.0a HMAC-SHA256 signer (`apps/woocommerce-mcp/src/woocommerce/oauth.ts`):
+    - Strict RFC 3986 percent encoding (`rfc3986`) conforming to RFC 5849 Section 3.6.
+    - Normalized parameter collection merging query parameters and OAuth parameters.
+    - Lexicographical parameter sorting per RFC 5849 Section 3.4.1.3.2.
+    - Architectural separation of transport base URI (`http://urumi-wordpress.urumi.svc.cluster.local:80`) and signature base URI (`http://shop.127.0.0.1.nip.io:8080`) mandated by WooCommerce core `check_oauth_signature()`.
+  - Implemented domain error mapping and bounds (`apps/woocommerce-mcp/src/woocommerce/errors.ts`):
+    - Typed hierarchy: `AuthenticationError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError`, `UpstreamTimeoutError`, `UpstreamPayloadTooLargeError`, `UpstreamServerError`, `UpstreamProtocolError`.
+    - All domain errors marked non-retryable (`isRetryable: false`) to prevent ambiguous write retries.
+    - HTML tag stripping and sanitization to prevent raw HTML/script leakage to LLMs.
+  - Implemented response validation and PII scrub mappers:
+    - `src/woocommerce/schemas.ts`: Zod validation of upstream WooCommerce responses.
+    - `src/woocommerce/mappers.ts`: Output projections strictly omitting customer billing/shipping addresses, phone numbers, email addresses, order customer notes, and IP addresses.
+  - Implemented `WooCommerceClient` (`apps/woocommerce-mcp/src/woocommerce/client.ts`):
+    - Implemented custom `httpTransport` using `node:http` and `node:https` to prevent Undici/fetch from stripping custom `Host` headers (`urumi-wordpress.urumi.svc.cluster.local`).
+    - Enforced 1 MiB hard response budget during chunk streaming (immediately destroying socket on breach).
+    - Enforced configurable timeout (`REQUEST_TIMEOUT_MS`) mapping directly to non-retryable `UpstreamTimeoutError`.
+    - Zero retry on `POST`/`PUT` operations.
+    - Implemented API methods for all 5 target operations: `listProducts`, `getProductBySku`, `createProduct`, `listOrders`, `getOrder`, `updateOrderStatus`.
+  - Executed Unit Test Suite (`apps/woocommerce-mcp/test/unit/*.test.ts`):
+    - Error mapping, sanitization, and response bounds: 7/7 pass.
+    - Output projection and PII redaction: 2/2 pass.
+    - OAuth 1.0a canonicalization, sorting, and determinism: 4/4 pass.
+    - Unit suite verdict: 13/13 tests passed.
+  - Executed Live Integration Test Suite (`apps/woocommerce-mcp/test/integration/client.live.test.ts`):
+    - Test 1: Live catalog read: retrieves seeded products 10, 11, 12 (PASS).
+    - Test 2: Live query-filtered read: pagination (`per_page=2`) and SKU filter (`URUMI-MUG-001`) (PASS).
+    - Test 3: Live order read: Order #14 retrieved and verified zero customer PII (PASS).
+    - Test 4: Live orders list: bounded list without customer PII (PASS).
+    - Test 5: Negative auth: invalid consumer key and secret rejected with HTTP 401 (PASS).
+    - Test 5b: Negative auth: missing credentials rejected with HTTP 401 (PASS).
+    - Test 5c: Live nonce replay enforcement: replaying exact same nonce and timestamp rejected by WooCommerce core with HTTP 401 (`"Invalid nonce - nonce has already been used."`) (PASS).
+    - Test 5d: Live timestamp freshness enforcement: stale timestamp (>15 mins) rejected by WooCommerce core with HTTP 401 (`"Invalid timestamp."`) (PASS).
+    - Test 6: Non-existent resource: safely mapped to HTTP 404 `NotFoundError` (PASS).
+    - Test 7: Duplicate SKU prevention: pre-checks SKU and blocks conflict before mutation (PASS).
+    - Test 8: Live product create & cleanup: disposable test product created via REST API and deleted via WP-CLI (PASS).
+    - Test 9: Timeout enforcement: aborts long-running request without retry (PASS).
+    - Live suite verdict: 12/12 tests passed.
+  - Verified API Key Scoping and Credentials:
+    - Inspected `wp_woocommerce_api_keys`: Key ID 1 belongs to user ID 2 (`urumi-mcp-integration`) with role `shop_manager` and permissions `read_write`.
+    - Principle of least privilege satisfied: integration user cannot modify WordPress core, plugins, themes, or administrator accounts.
+  - Verified Baseline Store State Preservation:
+    - Seeded products intact: ID 10 (`URUMI-MUG-001`), ID 11 (`URUMI-MOUSE-001`), ID 12 (`URUMI-NOTE-001`).
+    - Order #14 intact: status `processing`, INR 299.00. Zero extraneous records in store catalog.
+

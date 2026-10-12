@@ -11,6 +11,7 @@ const ConfigSchema = z.object({
   WOOCOMMERCE_SITE_URL: z.string().url().default('http://shop.127.0.0.1.nip.io:8080'),
   WOOCOMMERCE_CONSUMER_KEY: z.string().min(1, 'WOOCOMMERCE_CONSUMER_KEY is required'),
   WOOCOMMERCE_CONSUMER_SECRET: z.string().min(1, 'WOOCOMMERCE_CONSUMER_SECRET is required'),
+  UPSTREAM_HOST_HEADER: z.string().optional(),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
