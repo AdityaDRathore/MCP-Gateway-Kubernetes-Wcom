@@ -25,7 +25,7 @@ flowchart TD
     end
 
     subgraph InternalUpstreams ["Cluster-Internal MCP Servers (ClusterIP Only, No Ingress)"]
-        WooMCP["WooCommerce MCP Server<br/>(Custom TypeScript / Streamable HTTP)"]
+        WooMCP["WooCommerce MCP Server<br/>(apps/woocommerce-mcp:3000<br/>Custom TypeScript / Streamable HTTP)"]
         CRMMCP["CRM MCP Server<br/>(Internal Customer Records)"]
         TasksMCP["Tasks MCP Server<br/>(Internal Team Notes & Tasks)"]
     end
@@ -44,11 +44,11 @@ flowchart TD
 
     IngressApp --> GatewayBackend
     GatewayBackend <--> GatewayStorage
-    GatewayBackend -->|Cluster DNS: http://mcp-woocommerce:3000/mcp| WooMCP
-    GatewayBackend -->|Cluster DNS: http://mcp-crm:3000/mcp| CRMMCP
-    GatewayBackend -->|Cluster DNS: http://mcp-tasks:3000/mcp| TasksMCP
+    GatewayBackend -->|Cluster DNS: http://urumi-woocommerce-mcp:3000/mcp| WooMCP
+    GatewayBackend -->|Cluster DNS: http://urumi-mcp-crm:3000/mcp| CRMMCP
+    GatewayBackend -->|Cluster DNS: http://urumi-mcp-tasks:3000/mcp| TasksMCP
 
-    WooMCP -->|Internal DNS + API Secret: http://wordpress:80/wp-json/wc/v3| WordPress
+    WooMCP -->|Internal DNS + OAuth 1.0a HMAC-SHA256: http://urumi-wordpress:80/wp-json/wc/v3| WordPress
 ```
 
 ---
@@ -60,22 +60,22 @@ flowchart TD
 - **Runtime**: Pinned **Node.js 24 LTS (`v24.20.0`)** via `.nvmrc` and root `package.json` `engines`.
   > [!NOTE]
   > Node.js 20 reached official End-of-Life (EOL) in April 2026. Node.js 24 is the active Long Term Support (LTS) line in October 2026. The MCP SDK (`@modelcontextprotocol/sdk@1.32.1`) and TypeScript toolchain build and pass all automated tests cleanly on Node 24.
-- **Package Manager**: npm workspaces (`apps/dashboard`, `apps/gateway`, `apps/mcp-woocommerce`, `apps/mcp-crm`, `apps/mcp-tasks`, `packages/shared`).
+- **Package Manager**: npm workspaces (`apps/dashboard`, `apps/gateway`, `apps/woocommerce-mcp`, `apps/mcp-crm`, `apps/mcp-tasks`, `packages/shared`).
 - **Monorepo Layout**:
   ```
   urumi-platform/
   ├── apps/
   │   ├── dashboard/          # React + Vite admin dashboard & chat UI
   │   ├── gateway/            # Express + TypeScript gateway proxy & control plane
-  │   ├── mcp-woocommerce/    # Custom WooCommerce Streamable HTTP MCP server
-  │   ├── mcp-crm/            # Deterministic CRM upstream MCP server
-  │   └── mcp-tasks/          # Deterministic Tasks upstream MCP server
+  │   ├── woocommerce-mcp/    # Custom WooCommerce Streamable HTTP MCP server (Phase 3 Verified)
+  │   ├── mcp-crm/            # Deterministic CRM upstream MCP server (Phase 4 Planned)
+  │   └── mcp-tasks/          # Deterministic Tasks upstream MCP server (Phase 4 Planned)
   ├── packages/
   │   └── shared/             # Shared TypeScript types (audit logs, tool schemas)
   ├── infra/
   │   └── helm/
   │       └── urumi-platform/ # Unified Helm chart with values-local and values-prod
-  ├── docs/                   # ADRs, requirements traceability, and phase reports
+  ├── docs/                   # ADRs, requirements traceability, runbooks, and phase reports
   ├── spikes/                 # Protocol validation spikes (spikes/mcp-echo)
   └── package.json            # npm workspaces root
   ```
@@ -94,14 +94,14 @@ flowchart TD
 ### D3 — Service Boundaries & Network Isolation
 - **Public Surface**: Only the Storefront (`shop.127.0.0.1.nip.io:8080`) and the Dashboard/Gateway endpoint (`dashboard.127.0.0.1.nip.io:8080`) are exposed via Kubernetes Ingress.
 - **Private Surface**:
-  - `mcp-woocommerce`, `mcp-crm`, and `mcp-tasks` are strictly `ClusterIP` services. They have **no Ingress rules**.
+  - `urumi-woocommerce-mcp`, `urumi-mcp-crm`, and `urumi-mcp-tasks` are strictly `ClusterIP` services. They have **no Ingress rules**.
   - MariaDB is `ClusterIP` only, reachable only by WordPress.
 - **Network Isolation Policy**:
   - *ClusterIP Limitation*: Standard Kubernetes ClusterIP services prevent external ingress, but by default all pods within a cluster can communicate with any ClusterIP service.
-  - *NetworkPolicy Architecture*: Explicit Kubernetes `NetworkPolicy` objects are defined alongside workloads:
-    - `mcp-woocommerce` ingress is restricted solely to pods labeled `app.kubernetes.io/name: gateway`.
-    - `mariadb` ingress is restricted solely to pods labeled `app.kubernetes.io/name: wordpress`.
-    - External clients cannot bypass the gateway to call upstream tools directly.
+  - *NetworkPolicy Architecture*: Explicit Kubernetes `NetworkPolicy` objects are enforced by K3s `kube-router`:
+    - `urumi-woocommerce-mcp` ingress is restricted solely to pods labeled `app.kubernetes.io/component: gateway` (with conditional `test-client` in local development).
+    - `urumi-mariadb` ingress is restricted solely to pods labeled `app.kubernetes.io/component: wordpress`.
+    - Unauthorized pods attempting direct access are blocked at the packet filter level (connection refused).
 
 ### D4 — Secrets Management & Cryptographic Boundaries
 - **Kubernetes Secrets Trust Model**:
@@ -134,19 +134,15 @@ flowchart TD
 
 ---
 
-## 3. Workload Phasing & Resource Sizing Estimates
+## 3. Workload Phasing & Verified Resource Metrics
 
-> [!WARNING]
-> These resource values are **starting engineering estimates**, not proven capacity. The host development machine has 7.6 GiB total RAM with ~1.4 GiB free and active swap usage. Memory usage will be monitored continuously via `kubectl top pods` during startup and test runs.
-
-| Workload | Phase | Probes Planned | Resource Requests | Resource Limits | Persistent Storage |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **MariaDB** | Phase 2 | `healthcheck.sh` (startup, readiness, liveness) | 128Mi RAM / 100m CPU | 384Mi RAM / 500m CPU | 1 GiB PVC (`/var/lib/mysql`) |
-| **WordPress** | Phase 2 | `httpGet: /wp-login.php` (startup + readiness), `tcpSocket: 80` (liveness) | 256Mi RAM / 100m CPU | 512Mi RAM / 500m CPU | 1 GiB PVC (`/var/www/html`) |
-| **WooCommerce MCP** | Phase 3 | `httpGet: /health` (liveness + readiness) | 64Mi RAM / 50m CPU | 192Mi RAM / 250m CPU | Stateless |
-| **CRM / Tasks MCP** | Phase 4 | `httpGet: /health` (liveness + readiness) | 64Mi RAM / 50m CPU | 128Mi RAM / 200m CPU | Stateless (in-memory seed) |
-| **Gateway & Dashboard** | Phase 4 & 5 | `httpGet: /health` (liveness + readiness) | 96Mi RAM / 50m CPU | 256Mi RAM / 300m CPU | 500 MiB PVC (`/data/gateway.db`) |
-| **Total Cluster Usage** | — | — | **~608 MiB RAM** | **~1.47 GiB RAM** | Sized to fit available host RAM (~2.0 GiB available) |
+| Workload | Phase | Probes Active | Resource Requests | Resource Limits | Empirical Usage (G7 Live) | Persistent Storage |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **MariaDB** | Phase 2 | `healthcheck.sh` (startup, readiness, liveness) | 100m CPU / 128Mi RAM | 500m CPU / 384Mi RAM | **43m CPU / 180Mi RAM** | 1 GiB PVC (`/var/lib/mysql`) |
+| **WordPress** | Phase 2 | `httpGet: /wp-login.php` (startup + readiness), `tcpSocket: 80` (liveness) | 100m CPU / 256Mi RAM | 500m CPU / 512Mi RAM | **16m CPU / 193Mi RAM** | 1 GiB PVC (`/var/www/html`) |
+| **WooCommerce MCP** | Phase 3 | `httpGet: /health` (startup, readiness, liveness) | 50m CPU / 64Mi RAM | 150m CPU / 128Mi RAM | **1m CPU / 39Mi RAM** | Stateless |
+| **CRM / Tasks MCP** | Phase 4 | `httpGet: /health` (readiness + liveness) | 50m CPU / 64Mi RAM | 200m CPU / 128Mi RAM | — | Stateless (in-memory seed) |
+| **Gateway & Dashboard** | Phase 4 & 5 | `httpGet: /health` (readiness + liveness) | 50m CPU / 96Mi RAM | 300m CPU / 256Mi RAM | — | 500 MiB PVC (`/data/gateway.db`) |
 
 For detailed architectural decision records, see:
 - [**ADR-001**](decisions/ADR-001-stack-and-deployment.md): Application Stack, Node.js 24 LTS, and Local Kubernetes Strategy
@@ -155,4 +151,5 @@ For detailed architectural decision records, see:
 - [**ADR-004**](decisions/ADR-004-stateful-storage-and-workload-controllers.md): Stateful Storage Architecture and Workload Controller Selection
 - [**ADR-005**](decisions/ADR-005-local-rest-api-security-boundary.md): Local Development REST API Authentication and Security Boundary
 - [**ADR-006**](decisions/ADR-006-image-digest-locking-and-resource-tuning.md): Kubernetes Version Parity, Immutable Image Digest Locking, and Cgroup Memory Budgeting
+- [**ADR-007**](decisions/ADR-007-in-cluster-rest-api-authentication.md): In-Cluster REST API Authentication via RFC 5849 OAuth 1.0a HMAC-SHA256
 

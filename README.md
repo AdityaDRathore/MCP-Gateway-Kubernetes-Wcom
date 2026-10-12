@@ -42,7 +42,7 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 
 ---
 
-## Current Status: Phase 2 Complete (Stateful WooCommerce Store Deployed)
+## Current Status: Phase 3 Complete (Custom WooCommerce MCP Server Deployed)
 
 - **Phase 1 (Foundation & Scaffolding)**:
   - **Node.js LTS**: Pinned to **Node.js 24 LTS (`v24.20.0`)** via `.nvmrc` and `engines`.
@@ -52,10 +52,16 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 - **Phase 2 (Stateful Store Workload)**:
   - **Cluster**: Local k3d cluster `urumi` pinned to `rancher/k3s:v1.37.1-k3s1` (0 minor version skew with client `v1.37.1`).
   - **Container Images**: Pinned to `wordpress:7.1.3-php8.3-apache` and `mariadb:11.4.5` (digests locked in [`docs/phase-2/image-lock.md`](docs/phase-2/image-lock.md)).
-  - **Stateful Storage**: MariaDB StatefulSet (`/var/lib/mysql`) and WordPress Deployment (`/var/www/html`) bound to `local-path` PersistentVolumes. Survives pod restarts and replacements with zero data loss.
-  - **WooCommerce Storefront**: Active at `http://shop.127.0.0.1.nip.io:8080` with WooCommerce 11.2.1, INR currency (`₹`), flat rate shipping, and Cash on Delivery (COD). Seeded with 3 test products (Mug, Mouse, Notebook).
-  - **Verified Checkout & API**: End-to-end browser customer COD checkout placed Order #14 (`processing`, INR 299.00). Authenticated REST API (`wc/v3`) verified via Kubernetes Secret credentials with 401 negative auth enforcement.
-  - **Requirements Traceability**: 100% of INF-01..06 and STR-01..05 marked Verified in [`docs/requirements-traceability.md`](docs/requirements-traceability.md). Detailed operational runbook in [`docs/phase-2/store-deployment.md`](docs/phase-2/store-deployment.md).
+  - **Stateful Storage**: MariaDB StatefulSet (`/var/lib/mysql`) and WordPress Deployment (`/var/www/html`) bound to `local-path` PersistentVolumes. Survives pod restarts with zero data loss.
+  - **WooCommerce Storefront**: Active at `http://shop.127.0.0.1.nip.io:8080` with WooCommerce 11.2.1, INR (`₹`), COD, seeded with 3 products (Mug, Mouse, Notebook) and verified Order #14 (`processing`, INR 299.00).
+- **Phase 3 (Custom WooCommerce MCP Server on Kubernetes)**:
+  - **Stateless MCP Server**: Written from scratch in TypeScript (`apps/woocommerce-mcp`) using `@modelcontextprotocol/sdk@1.32.1` over **Streamable HTTP** (`POST /mcp`).
+  - **Five Approved Tools**: Strictly exposes `list_products`, `create_product`, `list_orders`, `get_order`, and `update_order_status`. Zero debug or mock tools.
+  - **In-Cluster Cryptographic Auth**: Uses RFC 5849 OAuth 1.0a HMAC-SHA256 for internal pod-to-pod communication (`urumi-wordpress:80`). Consumer secret is never sent over the wire ([ADR-007](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md)).
+  - **Private ClusterIP & NetworkPolicy**: Deployed as `urumi-woocommerce-mcp:3000` with zero public Ingress. Isolated via K3s `kube-router` NetworkPolicy packet filtering.
+  - **Comprehensive Regression Suite**: 120/120 automated tests pass (46 unit, 35 protocol, 39 live integration), plus in-cluster verifier pod execution.
+  - **Operational Footprint**: 1m CPU cores, 39 MiB memory under load. Graceful `SIGTERM` shutdown exit code 0 in ~1.2s.
+  - **Runbooks & Contracts**: Full runbooks in [`docs/phase-3/operational-runbook.md`](docs/phase-3/operational-runbook.md) and [`docs/phase-3/five-tool-contract.md`](docs/phase-3/five-tool-contract.md).
 
 ---
 
@@ -65,9 +71,9 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 ├── apps/
 │   ├── dashboard/            # (Phase 5) React + Vite dashboard & chat UI
 │   ├── gateway/              # (Phase 4) Team MCP Gateway backend
-│   ├── mcp-woocommerce/      # (Phase 3) Custom WooCommerce MCP server
-│   ├── mcp-crm/              # (Phase 4) Internal CRM upstream MCP server
-│   └── mcp-tasks/            # (Phase 4) Internal Tasks upstream MCP server
+│   ├── woocommerce-mcp/      # (Phase 3 Verified) Custom WooCommerce MCP server
+│   ├── mcp-crm/              # (Phase 4 Planned) Internal CRM upstream MCP server
+│   └── mcp-tasks/            # (Phase 4 Planned) Internal Tasks upstream MCP server
 ├── packages/
 │   └── shared/               # Shared TypeScript schemas, types, and utilities
 ├── infra/
@@ -83,11 +89,10 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 ├── docs/
 │   ├── architecture.md       # 4-layer architecture & storage failure models
 │   ├── requirements-traceability.md # Complete requirements matrix & DoD test plan
-│   ├── decisions/            # Architecture Decision Records (ADRs)
-│   │   ├── ADR-001-stack-and-deployment.md
-│   │   ├── ADR-002-mcp-compatibility.md
-│   │   └── ADR-003-secrets-and-access.md
-│   └── phase-1/              # Phase 1 audit & verification reports
+│   ├── decisions/            # Architecture Decision Records (ADRs 001–007)
+│   ├── phase-1/              # Phase 1 audit & verification reports
+│   ├── phase-2/              # Phase 2 store deployment runbooks
+│   └── phase-3/              # Phase 3 MCP contracts, runbooks & completion reports
 ├── package.json              # npm workspaces root
 └── tsconfig.base.json        # Base TypeScript compiler configuration
 ```
@@ -251,6 +256,33 @@ curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products |
 curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/orders | jq '.[].id'
 ```
 
+### 11. Verify Custom WooCommerce MCP Server (Phase 3)
+Verify the custom WooCommerce MCP server running inside Kubernetes:
+
+```bash
+# 1. Run full 120-test automated regression suite
+npm run test:unit --workspace=apps/woocommerce-mcp        # 46 unit tests pass
+npm run test:protocol --workspace=apps/woocommerce-mcp    # 35 protocol tests pass
+npm run test:integration --workspace=apps/woocommerce-mcp # 39 live integration tests pass
+
+# 2. Verify in-cluster Streamable HTTP MCP endpoint
+kubectl -n urumi run mcp-probe --rm -it --image=curlimages/curl --restart=Never \
+  --labels="app.kubernetes.io/component=test-client" \
+  -- curl -s http://urumi-woocommerce-mcp:3000/health
+# Expected: {"status":"ok"}
+
+# 3. Inspect live resource usage
+kubectl -n urumi top pod -l app.kubernetes.io/name=woocommerce-mcp
+# Expected: CPU ~1m, Memory ~39Mi
+
+# 4. Confirm zero state drift on protected store data
+kubectl -n urumi exec deployment/urumi-wordpress -- bash -c \
+  "if [ ! -f /usr/local/bin/wp ]; then cp /var/www/html/wp-cli.phar /usr/local/bin/wp && chmod +x /usr/local/bin/wp; fi; \
+   wp wc product list --user=1 --fields=id,name,sku,price,status --allow-root && \
+   wp wc shop_order list --user=1 --fields=id,status,total,currency --allow-root"
+# Expected: Products 10, 11, 12 published; Order #14 processing (₹299.00)
+```
+
 ---
 
 ## Architecture Decision Records (ADRs)
@@ -261,15 +293,19 @@ curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/orders | j
 - [**ADR-004**](docs/decisions/ADR-004-stateful-storage-and-workload-controllers.md): Stateful Storage Architecture and Workload Controller Selection
 - [**ADR-005**](docs/decisions/ADR-005-local-rest-api-security-boundary.md): Local Development REST API Authentication and Security Boundary
 - [**ADR-006**](docs/decisions/ADR-006-image-digest-locking-and-resource-tuning.md): Kubernetes Version Parity, Immutable Image Digest Locking, and Cgroup Memory Budgeting
+- [**ADR-007**](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md): In-Cluster REST API Authentication via RFC 5849 OAuth 1.0a HMAC-SHA256
 
 ---
 
-## Next Phase: Phase 3 (Custom WooCommerce MCP Server)
+## Next Phase: Phase 4 (Team MCP Gateway Core)
 
-Phase 3 focuses on developing the custom TypeScript Model Context Protocol (MCP) server for WooCommerce:
-1. Written from scratch in TypeScript under `apps/mcp-woocommerce/` using `@modelcontextprotocol/sdk@1.32.1`.
-2. Uses official **Streamable HTTP** transport (`StreamableHTTPServerTransport`) on `/mcp`.
-3. Implements 5 core store tools: `list_products`, `create_product`, `list_orders`, `get_order`, and `update_order_status`.
-4. Communicates directly with the internal WordPress ClusterIP service using the credentials in `urumi-woocommerce-api`.
-5. Exposed purely as an internal ClusterIP service (`urumi-mcp-woocommerce:3000`), isolated behind the gateway boundary.
+Phase 4 focuses on developing the central **Team MCP Gateway** (`apps/gateway/`):
+1. **Multi-Upstream Aggregation**: Downstream endpoint aggregating WooCommerce, CRM, and Tasks upstreams.
+2. **Tool Namespacing**: Dynamic `{server}__{tool}` prefixing (e.g. `woocommerce__list_products`).
+3. **Failure Isolation & Timeouts**: Per-upstream 10s request aborts; dead upstreams do not crash gateway.
+4. **Stateful SQLite on PVC**: SQLite database with WAL mode on persistent volume (`/data/gateway.db`).
+5. **Dynamic Upstream Management**: Dynamic enable/disable of upstream servers without gateway restarts.
+
+*Implementation is currently on hold awaiting formal Technical Lead & Product Manager authorization.*
+
 

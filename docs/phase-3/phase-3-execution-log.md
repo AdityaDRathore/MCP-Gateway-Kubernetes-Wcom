@@ -364,3 +364,29 @@ Authorized by Technical Lead to implement and verify exactly the three read tool
     - Plaintext internal HTTP: authenticated by OAuth 1.0a HMAC-SHA256, isolated by NetworkPolicy packet filtering.
     - Production Image Immutability Qualification: Follow-up required to publish image to container registry with published distribution manifest digest before declaring production readiness.
 
+---
+
+## 9. Gate G8: Documentation, Runbooks & Formal Phase 4 Sign-Off
+- **Status:** PASS (Phase 3 Closed; Phase 4 Awaiting Sign-Off)
+- **Date:** 2026-10-13
+- **Activities & Deliverables:**
+  - **Operational Runbook (`docs/phase-3/operational-runbook.md`)**:
+    - Comprehensive operations guide covering cluster preflight, store dependencies, secret management, Helm deployment (`values-local.yaml` vs `values-prod.yaml`), health checks/probes, graceful restarts, rollback workflows, troubleshooting matrix, and recovery procedures.
+  - **Verification Runbook (`docs/phase-3/verification-runbook.md`)**:
+    - Step-by-step reproducible guide for an independent reviewer to build, inspect, import, deploy, test (120 automated tests), execute in-cluster MCP verification, test NetworkPolicy enforcement, and audit clean state.
+  - **Five-Tool Contract (`docs/phase-3/five-tool-contract.md`)**:
+    - Exhaustive interface specification of `list_products`, `create_product`, `list_orders`, `get_order`, and `update_order_status` including Zod schemas, parameters, output projections, PII omission guarantees, and centralized error mapping.
+  - **Security & Deployment-Readiness Register (`docs/phase-3/security-and-deployment-readiness-register.md`)**:
+    - Auditable governance register tracking:
+      1. `SEC-REG-01`: Container Registry Publication & Distribution Digest Pinning (HIGH / Production Blocker; Target: Phase 7).
+      2. `SEC-REG-02`: Transport Layer Security / In-Cluster Encryption (MEDIUM / Mitigated by OAuth 1.0a HMAC-SHA256 & NetworkPolicy).
+      3. `SEC-REG-03`: WooCommerce API Key Least-Privilege Scoping (MEDIUM / Mitigated by application layer tool boundary).
+  - **Requirements Traceability Reconciliation (`docs/requirements-traceability.md`)**:
+    - Verified all 8 Category C requirements (WMC-01 through WMC-08) marked as Verified with Gate G7/G8 evidence; confirmed all 11 Category D requirements (GTW-01 through GTW-11) remain strictly Planned for Phase 4.
+  - **Formal Phase 4 Readiness Review (`docs/phase-3/phase-4-readiness-review.md`)**:
+    - Detailed architecture blueprint for the Team MCP Gateway Core (`apps/gateway/`): dual proxy, namespacing (`{server}__{tool}`), failure isolation, request timeouts, SQLite persistence on PVC (`/data/gateway.db`), mock upstreams (CRM, Tasks), prerequisites verification, and implementation gate structure.
+    - Explicit hold declared: Phase 4 implementation is on hold awaiting formal sign-off.
+  - **Platform Architecture & Readme Alignment**:
+    - Updated `docs/architecture.md` and `README.md` to reflect Phase 3 completion, exact monorepo paths, verified resource metrics (1m CPU / 39Mi memory), and ADR-007.
+
+
