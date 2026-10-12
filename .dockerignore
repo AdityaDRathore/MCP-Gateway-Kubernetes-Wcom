@@ -1,0 +1,33 @@
+# Ignore local node_modules and build outputs
+node_modules
+**/node_modules
+dist
+**/dist
+
+# Ignore test suites and test fixtures
+test
+tests
+**/test
+**/tests
+*.test.ts
+*.test.js
+
+# Ignore secrets, credentials, environment files, and scratch dirs
+.secrets
+**/.secrets
+.env*
+scratch
+**/.system_generated
+*.log
+
+# Ignore documentation, infrastructure, git and editor files
+.git
+.github
+.gemini
+docs
+infra
+scripts
+Context
+Resource
+documentation
+spikes

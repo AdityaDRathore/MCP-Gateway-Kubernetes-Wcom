@@ -1,0 +1,8 @@
+node_modules
+dist
+test
+*.test.ts
+.secrets
+.env*
+scratch
+*.log

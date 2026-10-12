@@ -1,0 +1,142 @@
+{{- if and .Values.networkPolicy .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: urumi-woocommerce-mcp-netpol
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-woocommerce
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mcp-woocommerce
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow incoming MCP traffic only from intended gateway workloads and authorized test runners
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: gateway
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test-client
+      ports:
+        - protocol: TCP
+          port: {{ .Values.upstreams.woocommerce.service.port | default 3000 }}
+  egress:
+    # Allow egress to WordPress REST API on port 80
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: wordpress
+      ports:
+        - protocol: TCP
+          port: 80
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: urumi-wordpress-netpol
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wordpress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: wordpress
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # 1. Allow public storefront traffic through Traefik ingress controller in kube-system
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 80
+    # 2. Allow internal REST API traffic from WooCommerce MCP server
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: mcp-woocommerce
+      ports:
+        - protocol: TCP
+          port: 80
+    # 3. Allow authorized in-cluster test and administrative diagnostic clients
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test-client
+      ports:
+        - protocol: TCP
+          port: 80
+  egress:
+    # Allow egress to MariaDB database on port 3306
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: mariadb
+      ports:
+        - protocol: TCP
+          port: 3306
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: urumi-mariadb-netpol
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mariadb
+  policyTypes:
+    - Ingress
+  ingress:
+    # Restrict MariaDB access exclusively to the WordPress web application
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: wordpress
+      ports:
+        - protocol: TCP
+          port: 3306
+{{- end }}

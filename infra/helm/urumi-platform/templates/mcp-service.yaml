@@ -1,0 +1,20 @@
+{{- if .Values.upstreams.woocommerce.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: urumi-woocommerce-mcp
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-woocommerce
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.upstreams.woocommerce.service.port | default 3000 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: mcp-woocommerce
+{{- end }}

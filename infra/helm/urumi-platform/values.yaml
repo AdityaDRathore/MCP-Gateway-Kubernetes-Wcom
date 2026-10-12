@@ -65,7 +65,12 @@ gateway:
 upstreams:
   woocommerce:
     enabled: true
-    image: "mcp-woocommerce:latest"
+    image: "urumi-woocommerce-mcp:1.0.0"
+    digest: "sha256:989be8eec69408fdf10114b3dc4695771936f306b9ad7ccff09fff0a07c9f9a1"
+    imagePullPolicy: "IfNotPresent"
+    replicas: 1
+    service:
+      port: 3000
     resources:
       requests:
         cpu: "50m"
@@ -73,6 +78,26 @@ upstreams:
       limits:
         cpu: "250m"
         memory: "192Mi"
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+    env:
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      WOOCOMMERCE_BASE_URL: "http://urumi-wordpress.urumi.svc.cluster.local:80"
+      WOOCOMMERCE_SITE_URL: "http://shop.127.0.0.1.nip.io:8080"
+      REQUEST_TIMEOUT_MS: "10000"
+      NODE_ENV: "production"
+      LOG_LEVEL: "info"
+    secretName: "urumi-woocommerce-api"
   crm:
     enabled: true
     image: "mcp-crm:latest"
@@ -93,3 +118,7 @@ upstreams:
       limits:
         cpu: "200m"
         memory: "128Mi"
+
+networkPolicy:
+  enabled: true
+

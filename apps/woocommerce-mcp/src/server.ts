@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Request, Response } from 'express';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -7,6 +8,14 @@ import { healthHandler } from './http/health.js';
 import { registerAllTools } from './tools/index.js';
 import { logger } from './logging/logger.js';
 import { WooCommerceClient } from './woocommerce/client.js';
+
+// Polyfill global crypto for SDK Streamable HTTP transport streamId generation
+if (typeof (globalThis as any).crypto === 'undefined') {
+  (globalThis as any).crypto = crypto;
+}
+if (typeof (global as any).crypto === 'undefined') {
+  (global as any).crypto = crypto;
+}
 
 /**
  * Creates and configures an MCP server instance with all five WooCommerce tools registered.

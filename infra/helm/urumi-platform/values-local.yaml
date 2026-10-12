@@ -49,6 +49,9 @@ gateway:
 
 upstreams:
   woocommerce:
+    image: "urumi-woocommerce-mcp:1.0.0"
+    digest: ""
+    imagePullPolicy: "IfNotPresent"
     resources:
       requests:
         cpu: "25m"
@@ -72,3 +75,7 @@ upstreams:
       limits:
         cpu: "150m"
         memory: "128Mi"
+
+networkPolicy:
+  enabled: true
+

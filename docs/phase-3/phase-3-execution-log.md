@@ -4,7 +4,7 @@
 **Phase:** 3 — Custom WooCommerce MCP Server  
 **Namespace:** `urumi`  
 **Engineer:** Antigravity AI (Pair Programming with Aditya Rathore)  
-**Status:** In Progress (G0, G1, G2 PASS)  
+**Status:** In Progress (G0, G1, G2, G3, G4, G5, G6 PASS)  
 
 ---
 
@@ -267,6 +267,54 @@ Authorized by Technical Lead to implement and verify exactly the three read tool
    - Products query (`wp post list --post_type=product`): exactly 3 products present (10, 11, 12); 0 temporary products left behind.
    - Orders query (`wp wc shop_order list`): exactly 1 order present (Order #14 in `processing` status, ₹299.00); 0 temporary orders left behind.
 
+---
 
-
-
+## 7. Gate G6: Docker Packaging, Helm Deployment & Network Security Verification
+- **Status:** PASS
+- **Date:** 2026-10-12
+- **Activities:**
+  - **Docker Packaging & Image Audit**:
+    - Built multi-stage Docker image `urumi-woocommerce-mcp:1.0.0` (Digest: `sha256:d831a5b6b4c3b21c6d930eece6e484c4ccebcbbcdf9bf00ccea98c61eb9fee6a`).
+    - Base runtime pinned: `node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1`.
+    - Non-root execution: UID `10001` (`mcpuser`), GID `10001` (`mcpuser`).
+    - Excluded `.dockerignore` paths: `node_modules`, `dist`, `src`, `test`, `.secrets`, `.env*`, `.git`, `.github`.
+    - Filesystem audit verified `/app` contains strictly `dist/`, `package.json`, and production `node_modules/` (zero source `.ts` or test fixtures). Total image size: 187 MB.
+    - Verified clean `SIGTERM` signal handling: container shuts down within milliseconds with exit code 0.
+    - Imported into local k3d cluster: `k3d image import urumi-woocommerce-mcp:1.0.0 -c urumi`.
+  - **Helm Chart Integration**:
+    - Created `infra/helm/urumi-platform/templates/mcp-deployment.yaml`:
+      - RollingUpdate deployment strategy (`maxSurge: 1`, `maxUnavailable: 0`).
+      - Security context: `runAsNonRoot: true`, `runAsUser: 10001`, `runAsGroup: 10001`, `allowPrivilegeEscalation: false`, capabilities `drop: ["ALL"]`, `seccompProfile: RuntimeDefault`.
+      - Probes: startup probe (`/health`, 10 failures x 3s = 30s budget), readiness probe (`/health`, 5s period), liveness probe (`/health`, 10s period).
+      - Environment injection: `WOOCOMMERCE_CONSUMER_KEY` and `WOOCOMMERCE_CONSUMER_SECRET` injected strictly via `secretKeyRef` targeting `urumi-woocommerce-api`. Zero plaintext credentials in values or manifests.
+    - Created `infra/helm/urumi-platform/templates/mcp-service.yaml`:
+      - ClusterIP service on port 3000 (targetPort `http`).
+      - Zero Ingress, NodePort, or hostPort rules.
+    - Created `infra/helm/urumi-platform/templates/networkpolicy.yaml`:
+      - `urumi-woocommerce-mcp-netpol`: Ingress allowed strictly from workloads labeled `app.kubernetes.io/component: gateway` and `test-client` on TCP port 3000; egress allowed to WordPress TCP port 80 and CoreDNS UDP/TCP port 53.
+      - `urumi-wordpress-netpol`: Ingress allowed from Traefik (`kube-system`), MCP server (`mcp-woocommerce`), and `test-client` on TCP port 80; egress allowed to MariaDB TCP port 3306 and CoreDNS port 53.
+      - `urumi-mariadb-netpol`: Ingress allowed strictly from WordPress (`app.kubernetes.io/component: wordpress`) on TCP port 3306.
+    - Updated values profiles (`values.yaml`, `values-local.yaml`, `values-prod.yaml`):
+      - `helm lint infra/helm/urumi-platform`: 0 chart errors.
+      - `helm template` validated for both local and production-like profiles with immutable digest pinning.
+  - **Cluster Rollout & Readiness**:
+    - Upgraded release `urumi-store` to revision 3 in namespace `urumi`.
+    - Pod `urumi-woocommerce-mcp-b4d8d4f99-vkpdb` reached 1/1 Running & Ready with all probes passing.
+    - Zero disruption to existing `urumi-wordpress` and `urumi-mariadb-0` pods or persistent storage.
+  - **Empirical NetworkPolicy Enforcement Verification**:
+    - Verified K3s `kube-router` packet filtering actively running inside `k3d-urumi-server-0`.
+    - Positive test: Pod with `component: test-client` reaches `http://urumi-woocommerce-mcp:3000/health` (HTTP 200).
+    - Negative test 1 (MCP Ingress): Pod with `component: unauthorized` attempting to connect to `urumi-woocommerce-mcp:3000` is blocked with connection refused (exit code 7).
+    - Negative test 2 (WP Ingress): Unauthorized pod attempting to connect to `urumi-wordpress:80` is blocked with connection refused (exit code 7).
+    - Negative test 3 (MCP Egress): MCP pod attempting direct connection to MariaDB `urumi-mariadb:3306` is blocked (`ECONNREFUSED`).
+    - Positive test 2 (MCP to WP): MCP pod reaches `urumi-wordpress:80/wp-json/` (HTTP 200).
+    - Storefront accessibility: `http://shop.127.0.0.1.nip.io:8080/` loads via Traefik Ingress (HTTP 200).
+  - **Full Regression Verification**:
+    - Unit tests: 46/46 passed (`npm run test:unit --workspace=apps/woocommerce-mcp`).
+    - Protocol tests: 35/35 passed (`npm run test:protocol --workspace=apps/woocommerce-mcp`).
+    - Live integration tests: 39/39 passed (`npm run test:integration --workspace=apps/woocommerce-mcp`).
+    - In-cluster E2E client verification: temporary pod `mcp-e2e-verifier` connected to deployed Service `http://urumi-woocommerce-mcp:3000/mcp`, discovered exact 5 tools, successfully ran `list_products` and `get_order` with zero PII exposure.
+  - **Store State & Protected Baseline Preservation**:
+    - Verified products 10 (`URUMI-MUG-001`), 11 (`URUMI-MOUSE-001`), 12 (`URUMI-NOTE-001`) remain intact and published.
+    - Verified Order #14 remains in `processing` status (₹299.00) with zero mutation.
+    - Confirmed zero temporary test fixtures or test pods remaining in the cluster.

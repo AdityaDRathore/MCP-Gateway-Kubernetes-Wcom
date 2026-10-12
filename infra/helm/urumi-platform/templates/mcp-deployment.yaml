@@ -1,0 +1,102 @@
+{{- if .Values.upstreams.woocommerce.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: urumi-woocommerce-mcp
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-woocommerce
+spec:
+  replicas: {{ .Values.upstreams.woocommerce.replicas | default 1 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mcp-woocommerce
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: mcp-woocommerce
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: woocommerce-mcp
+          image: {{ if .Values.upstreams.woocommerce.digest }}{{ printf "%s@%s" .Values.upstreams.woocommerce.image .Values.upstreams.woocommerce.digest | quote }}{{ else }}{{ .Values.upstreams.woocommerce.image | default "urumi-woocommerce-mcp:1.0.0" | quote }}{{ end }}
+          imagePullPolicy: {{ .Values.upstreams.woocommerce.imagePullPolicy | default "IfNotPresent" | quote }}
+          ports:
+            - containerPort: {{ .Values.upstreams.woocommerce.service.port | default 3000 }}
+              name: http
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: NODE_ENV
+              value: {{ if .Values.upstreams.woocommerce.env }}{{ .Values.upstreams.woocommerce.env.NODE_ENV | default "production" | quote }}{{ else }}"production"{{ end }}
+            - name: PORT
+              value: {{ .Values.upstreams.woocommerce.service.port | default 3000 | quote }}
+            - name: HOST
+              value: "0.0.0.0"
+            - name: WOOCOMMERCE_BASE_URL
+              value: {{ if .Values.upstreams.woocommerce.env }}{{ .Values.upstreams.woocommerce.env.WOOCOMMERCE_BASE_URL | default "http://urumi-wordpress.urumi.svc.cluster.local:80" | quote }}{{ else }}"http://urumi-wordpress.urumi.svc.cluster.local:80"{{ end }}
+            - name: WOOCOMMERCE_SITE_URL
+              value: {{ if .Values.upstreams.woocommerce.env }}{{ .Values.upstreams.woocommerce.env.WOOCOMMERCE_SITE_URL | default "http://shop.127.0.0.1.nip.io:8080" | quote }}{{ else }}"http://shop.127.0.0.1.nip.io:8080"{{ end }}
+            - name: REQUEST_TIMEOUT_MS
+              value: {{ if .Values.upstreams.woocommerce.env }}{{ .Values.upstreams.woocommerce.env.REQUEST_TIMEOUT_MS | default "10000" | quote }}{{ else }}"10000"{{ end }}
+            - name: LOG_LEVEL
+              value: {{ if .Values.upstreams.woocommerce.env }}{{ .Values.upstreams.woocommerce.env.LOG_LEVEL | default "info" | quote }}{{ else }}"info"{{ end }}
+            - name: WOOCOMMERCE_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.upstreams.woocommerce.secretName | default "urumi-woocommerce-api" | quote }}
+                  key: consumer-key
+            - name: WOOCOMMERCE_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.upstreams.woocommerce.secretName | default "urumi-woocommerce-api" | quote }}
+                  key: consumer-secret
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- if .Values.upstreams.woocommerce.resources }}
+          resources:
+            {{- toYaml .Values.upstreams.woocommerce.resources | nindent 12 }}
+          {{- end }}
+{{- end }}

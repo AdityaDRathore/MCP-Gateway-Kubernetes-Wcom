@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createExpressApp } from '../../src/server.js';
@@ -17,12 +19,7 @@ const TEST_CONFIG: AppConfig = {
   LOG_LEVEL: 'error',
 };
 
-async function runProtocolTests() {
-  console.log('========================================================');
-  console.log('🧪 Starting Gate G2 MCP Protocol & Discovery Test Suite');
-  console.log(`Endpoint: http://127.0.0.1:${TEST_PORT}/mcp`);
-  console.log('========================================================');
-
+test('Gate G2 MCP Protocol & Discovery Test Suite', async () => {
   const app = createExpressApp(TEST_CONFIG);
   const server = app.listen(TEST_PORT, '127.0.0.1');
 
@@ -138,16 +135,8 @@ async function runProtocolTests() {
     }
 
     await client.close();
-    console.log('\n========================================================');
-    console.log('🏁 Gate G2 Protocol Test Suite: 5/5 CHECKS PASSED');
-    console.log('🎉 VERDICT: GATE G2 ACCEPTANCE CRITERIA FULLY SATISFIED!');
-    console.log('========================================================');
   } finally {
     server.close();
   }
-}
-
-runProtocolTests().catch((err) => {
-  console.error('\n❌ Gate G2 Protocol Test Failed:', err);
-  process.exit(1);
 });
+
