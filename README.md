@@ -42,16 +42,20 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 
 ---
 
-## Current Status: Phase 1 Complete (Foundation & Scaffolding)
+## Current Status: Phase 2 Complete (Stateful WooCommerce Store Deployed)
 
-- **Node.js LTS**: Pinned to **Node.js 24 LTS (`v24.20.0`)** via `.nvmrc` and `engines` (Node 20 reached EOL in April 2026).
-- **MCP Wire Protocol**: Pinned to official `@modelcontextprotocol/sdk@1.32.1` using **Streamable HTTP** (wire version `2024-11-05`). Verified via automated 4/4 test suite in `spikes/mcp-echo/`.
-- **Tooling Installed & Verified**:
-  - `kubectl`: `v1.37.1`
-  - `helm`: `v3.17.1`
-  - `k3d`: `v5.8.3`
-- **Monorepo & Packaging**: Root npm workspace with `packages/shared`, and unified Helm chart (`infra/helm/urumi-platform`) validated via `helm lint` and `helm template`.
-- **Requirements Traceability**: 100% of mandatory requirements mapped to atomic tests in [`docs/requirements-traceability.md`](docs/requirements-traceability.md).
+- **Phase 1 (Foundation & Scaffolding)**:
+  - **Node.js LTS**: Pinned to **Node.js 24 LTS (`v24.20.0`)** via `.nvmrc` and `engines`.
+  - **MCP Wire Protocol**: Pinned to official `@modelcontextprotocol/sdk@1.32.1` using **Streamable HTTP** (wire revision `2024-11-05`). Verified via automated 4/4 test suite in `spikes/mcp-echo/`.
+  - **Toolchain**: `kubectl v1.37.1`, `helm v3.17.1`, `k3d v5.8.3`.
+  - **Packaging**: Monorepo with root npm workspace and unified Helm chart (`infra/helm/urumi-platform`).
+- **Phase 2 (Stateful Store Workload)**:
+  - **Cluster**: Local k3d cluster `urumi` pinned to `rancher/k3s:v1.37.1-k3s1` (0 minor version skew with client `v1.37.1`).
+  - **Container Images**: Pinned to `wordpress:7.1.3-php8.3-apache` and `mariadb:11.4.5` (digests locked in [`docs/phase-2/image-lock.md`](docs/phase-2/image-lock.md)).
+  - **Stateful Storage**: MariaDB StatefulSet (`/var/lib/mysql`) and WordPress Deployment (`/var/www/html`) bound to `local-path` PersistentVolumes. Survives pod restarts and replacements with zero data loss.
+  - **WooCommerce Storefront**: Active at `http://shop.127.0.0.1.nip.io:8080` with WooCommerce 11.2.1, INR currency (`₹`), flat rate shipping, and Cash on Delivery (COD). Seeded with 3 test products (Mug, Mouse, Notebook).
+  - **Verified Checkout & API**: End-to-end browser customer COD checkout placed Order #14 (`processing`, INR 299.00). Authenticated REST API (`wc/v3`) verified via Kubernetes Secret credentials with 401 negative auth enforcement.
+  - **Requirements Traceability**: 100% of INF-01..06 and STR-01..05 marked Verified in [`docs/requirements-traceability.md`](docs/requirements-traceability.md). Detailed operational runbook in [`docs/phase-2/store-deployment.md`](docs/phase-2/store-deployment.md).
 
 ---
 
@@ -157,6 +161,85 @@ helm template test-prod infra/helm/urumi-platform -f infra/helm/urumi-platform/v
 ```
 **Expected Outcome**: 0 lint errors; templates render valid Kubernetes manifests.
 
+### 5. Provision Local Cluster & Secrets (Phase 2)
+Create the local k3d cluster with pinned K3s version matching host `kubectl v1.37.1` (0 minor version skew):
+```bash
+k3d cluster create urumi \
+  --image rancher/k3s:v1.37.1-k3s1 \
+  --port "8080:80@loadbalancer" \
+  --port "8443:443@loadbalancer" \
+  --timeout 180s
+```
+
+Generate secure database credentials into a gitignored, mode-0600 file and create the Kubernetes Secret:
+```bash
+mkdir -p .secrets && chmod 700 .secrets
+cat <<EOF > .secrets/phase2-store.env
+mariadb-root-password=$(openssl rand -hex 16)
+mariadb-password=$(openssl rand -hex 16)
+EOF
+chmod 600 .secrets/phase2-store.env
+
+kubectl --context k3d-urumi create namespace urumi --dry-run=client -o yaml | kubectl --context k3d-urumi apply -f -
+kubectl --context k3d-urumi -n urumi create secret generic urumi-store-secrets \
+  --from-env-file=.secrets/phase2-store.env \
+  --dry-run=client -o yaml | kubectl --context k3d-urumi apply -f -
+```
+
+### 6. Deploy Stateful WooCommerce Store via Helm
+Deploy the store workloads (MariaDB StatefulSet, WordPress Deployment, PVCs, Services, Ingress):
+```bash
+helm --kube-context k3d-urumi upgrade --install urumi-store \
+  infra/helm/urumi-platform \
+  --namespace urumi \
+  --create-namespace \
+  -f infra/helm/urumi-platform/values-local.yaml
+
+# Wait for pods and PVCs to be ready
+kubectl --context k3d-urumi -n urumi rollout status statefulset/urumi-mariadb
+kubectl --context k3d-urumi -n urumi rollout status deployment/urumi-wordpress
+```
+
+### 7. Access Storefront & Test Order Checkout (COD)
+- **Storefront URL**: [http://shop.127.0.0.1.nip.io:8080/](http://shop.127.0.0.1.nip.io:8080/)
+- **Catalog**: Browse products at `/shop/` (contains seeded items: `Urumi Test Mug`, `Wireless Mouse Demo`, `Notebook Demo`).
+- **Checkout Flow**: Add any product to cart $\rightarrow$ navigate to `/checkout/` $\rightarrow$ fill test customer details $\rightarrow$ select **Cash on delivery (COD)** $\rightarrow$ Place Order.
+- **Admin Verification**: Inspect orders in WooCommerce Admin at `/wp-admin/edit.php?post_type=shop_order` (verified Order #14 in `processing` status).
+
+### 8. Verify WooCommerce REST API (`/wp-json/wc/v3`)
+Retrieve API consumer credentials from Kubernetes Secret `urumi-woocommerce-api`:
+```bash
+CK=$(kubectl --context k3d-urumi -n urumi get secret urumi-woocommerce-api -o jsonpath='{.data.consumer-key}' | base64 -d)
+CS=$(kubectl --context k3d-urumi -n urumi get secret urumi-woocommerce-api -o jsonpath='{.data.consumer-secret}' | base64 -d)
+
+# Negative test (expect 401 Unauthorized)
+curl -sS -I http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products
+
+# Authenticated product listing (returns 3 seeded products)
+curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products | jq '.[].name'
+
+# Authenticated order listing (returns placed COD order)
+curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/orders | jq '.[].id'
+```
+
+### 9. Verify Pod Restart Durability & Data Persistence
+Verify that pod crashes or rolling replacements cause zero data loss:
+```bash
+# Capture PVC baseline UID
+kubectl --context k3d-urumi -n urumi get pvc -o custom-columns=NAME:.metadata.name,UID:.metadata.uid
+
+# Rollout restart store workloads
+kubectl --context k3d-urumi -n urumi rollout restart deployment/urumi-wordpress
+kubectl --context k3d-urumi -n urumi rollout status deployment/urumi-wordpress
+
+kubectl --context k3d-urumi -n urumi rollout restart statefulset/urumi-mariadb
+kubectl --context k3d-urumi -n urumi rollout status statefulset/urumi-mariadb
+
+# Re-verify store data integrity via REST API
+curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products | jq '.[].name'
+curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/orders | jq '.[].id'
+```
+
 ---
 
 ## Architecture Decision Records (ADRs)
@@ -167,13 +250,12 @@ helm template test-prod infra/helm/urumi-platform -f infra/helm/urumi-platform/v
 
 ---
 
-## Next Phase: Phase 2 (Stateful Store Deployment)
+## Next Phase: Phase 3 (Custom WooCommerce MCP Server)
 
-Phase 2 focuses on deploying the stateful WooCommerce store onto the local k3d cluster:
-1. Create the local cluster:
-   ```bash
-   k3d cluster create urumi --port "8080:80@loadbalancer" --port "8443:443@loadbalancer"
-   ```
-2. Deploy MariaDB and WordPress with PersistentVolumeClaims.
-3. Access storefront at `http://shop.127.0.0.1.nip.io:8080` and complete a test purchase (Cash on Delivery).
-4. Restart the store pods and verify zero data loss.
+Phase 3 focuses on developing the custom TypeScript Model Context Protocol (MCP) server for WooCommerce:
+1. Written from scratch in TypeScript under `apps/mcp-woocommerce/` using `@modelcontextprotocol/sdk@1.32.1`.
+2. Uses official **Streamable HTTP** transport (`StreamableHTTPServerTransport`) on `/mcp`.
+3. Implements 5 core store tools: `list_products`, `create_product`, `list_orders`, `get_order`, and `update_order_status`.
+4. Communicates directly with the internal WordPress ClusterIP service using the credentials in `urumi-woocommerce-api`.
+5. Exposed purely as an internal ClusterIP service (`urumi-mcp-woocommerce:3000`), isolated behind the gateway boundary.
+
