@@ -4,7 +4,7 @@
 **Phase:** 3 — Custom WooCommerce MCP Server  
 **Namespace:** `urumi`  
 **Engineer:** Antigravity AI (Pair Programming with Aditya Rathore)  
-**Status:** In Progress (G0, G1, G2, G3, G4, G5, G6 PASS)  
+**Status:** In Progress (G0–G6 PASS, G7 PASS)  
 
 ---
 
@@ -318,3 +318,49 @@ Authorized by Technical Lead to implement and verify exactly the three read tool
     - Verified products 10 (`URUMI-MUG-001`), 11 (`URUMI-MOUSE-001`), 12 (`URUMI-NOTE-001`) remain intact and published.
     - Verified Order #14 remains in `processing` status (₹299.00) with zero mutation.
     - Confirmed zero temporary test fixtures or test pods remaining in the cluster.
+
+---
+
+## 8. Gate G7: Full End-to-End Acceptance Verification
+- **Status:** PASS
+- **Date:** 2026-10-13
+- **Activities:**
+  - **Hard Blockers & Acceptance Criteria Audit (Section 15.1)**:
+    - Phase 2 baseline products 10, 11, 12 and Order #14 verified preserved throughout entire execution.
+    - Internal OAuth 1.0a HMAC-SHA256 authentication verified live against internal WordPress Service (`urumi-wordpress.urumi.svc.cluster.local:80`).
+    - Exact 5 tools registered and discovered via MCP `tools/list`: `list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`. Zero debug, proxy, or mock tools.
+    - All 5 tools invoke live WooCommerce REST API (`/wp-json/wc/v3/`).
+    - Bounded inputs and pre-call rejection verified across all tools (negative IDs, floats, prices <= 0, stock without manage_stock, invalid SKU regex, unapproved order statuses, inverted date ranges).
+    - Ambiguous write timeouts abort cleanly with non-retryable `UpstreamTimeoutError` (zero blind write retries).
+    - Upstream errors mapped to domain types (`AuthenticationError`, `NotFoundError`, `ConflictError`).
+    - Output projection and PII scrubbing verified on live orders: billing/shipping addresses, phone numbers, emails, customer notes, IP addresses, and user agents strictly omitted from tool responses.
+    - MCP server deployed exclusively via `ClusterIP` Service on port 3000; zero Ingress, NodePort, or hostPort rules.
+    - Non-root user `mcpuser` (UID 10001) enforced with dropped capabilities (`drop: ["ALL"]`).
+    - Pod health verified: startup, readiness, and liveness probes passing.
+  - **Resource Usage & Cgroup Budget Audit**:
+    - Measured actual resource consumption under live load via `kubectl top pod`:
+      - `urumi-woocommerce-mcp`: **1m CPU**, **37Mi Memory** (well within limits: 150m CPU, 128Mi Memory).
+      - Fits comfortably within local machine RAM capacity (~1.4 GiB free).
+  - **Graceful Shutdown & Rollout Restart Test**:
+    - Executed `kubectl rollout restart deployment/urumi-woocommerce-mcp -n urumi`.
+    - Verified smooth rolling replacement (`maxSurge: 1`, `maxUnavailable: 0`).
+    - Terminated pod received SIGTERM and exited cleanly with code 0 within ~1.2s.
+    - Store workloads and persistent PVCs remained 100% healthy and undisturbed.
+  - **Full Regression Test Matrix**:
+    - **Unit Tests:** **46/46 passed** (`npm run test:unit --workspace=apps/woocommerce-mcp`).
+    - **Protocol Tests:** **35/35 passed** (`npm run test:protocol --workspace=apps/woocommerce-mcp`).
+    - **Live Integration Tests:** **39/39 passed** (`npm run test:integration --workspace=apps/woocommerce-mcp`).
+    - Total automated tests: **120/120 passed (0 failed)**.
+  - **In-Cluster MCP Endpoint Verification**:
+    - In-cluster client pod executed Streamable HTTP transport handshake, listed exactly 5 tools, and invoked `list_products` (returned seeded catalog) and `get_order` (returned Order #14 without PII).
+  - **Post-Acceptance Store State Audit via WP-CLI**:
+    - Product ID 10: `URUMI-MUG-001` (₹299, `publish`)
+    - Product ID 11: `URUMI-MOUSE-001` (₹799, `publish`)
+    - Product ID 12: `URUMI-NOTE-001` (₹149, `publish`)
+    - Order #14: Status `processing`, Total `₹299.00`, Currency `INR`.
+    - Exactly 3 products and 1 order present; zero temporary fixtures or dangling pods remain.
+  - **Documented Residual Risks & Qualification**:
+    - Broad `read_write` WooCommerce API key permissions: mitigated by application layer boundary.
+    - Plaintext internal HTTP: authenticated by OAuth 1.0a HMAC-SHA256, isolated by NetworkPolicy packet filtering.
+    - Production Image Immutability Qualification: Follow-up required to publish image to container registry with published distribution manifest digest before declaring production readiness.
+
