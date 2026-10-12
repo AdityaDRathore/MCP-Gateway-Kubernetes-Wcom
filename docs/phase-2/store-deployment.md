@@ -101,57 +101,32 @@ Both PVCs will bind to `local-path`:
 
 ---
 
-## 5. Store Bootstrap & Configuration
+## 5. Automated & Deterministic Store Bootstrap
 
-### 5.1 WordPress Installation & Permalinks
-Once pods reach `Running`, initialize WordPress and enable Pretty Permalinks:
+To ensure complete, repeatable, and idempotent reproduction, the platform provides an automated bootstrap script: [`scripts/bootstrap-store.sh`](../../scripts/bootstrap-store.sh).
 
+Execute the bootstrap script from the repository root:
 ```bash
-kubectl --context k3d-urumi -n urumi exec deployment/urumi-wordpress -- wp core install \
-  --path=/var/www/html \
-  --url=http://shop.127.0.0.1.nip.io:8080 \
-  --title="Urumi Store Demo" \
-  --admin_user=urumi_admin \
-  --admin_password="<secure-admin-password>" \
-  --admin_email=admin@demo.local \
-  --allow-root
-
-kubectl --context k3d-urumi -n urumi exec deployment/urumi-wordpress -- wp rewrite structure '/%postname%/' --path=/var/www/html --allow-root
-kubectl --context k3d-urumi -n urumi exec deployment/urumi-wordpress -- wp rewrite flush --path=/var/www/html --allow-root
+./scripts/bootstrap-store.sh
 ```
 
-### 5.2 WooCommerce Installation & Settings
-Install WooCommerce 11.2.1, configure INR currency, flat-rate shipping, and Cash on Delivery:
-
-```bash
-kubectl --context k3d-urumi -n urumi exec deployment/urumi-wordpress -- wp plugin install woocommerce --version=11.2.1 --activate --path=/var/www/html --allow-root
-
-kubectl --context k3d-urumi -n urumi exec deployment/urumi-wordpress -- wp eval '
-WC_Install::create_pages();
-update_option("woocommerce_currency", "INR");
-update_option("woocommerce_cod_settings", array(
-    "enabled" => "yes",
-    "title" => "Cash on delivery",
-    "description" => "Pay with cash upon delivery.",
-    "enable_for_virtual" => "yes"
-));
-$zone = new WC_Shipping_Zone(0);
-if (empty($zone->get_shipping_methods())) {
-    $id = $zone->add_shipping_method("flat_rate");
-    $m = WC_Shipping_Zones::get_shipping_method($id);
-    if ($m) {
-        $m->set_post_data(array("woocommerce_flat_rate_cost" => "0", "woocommerce_flat_rate_title" => "Free Shipping"));
-        $m->process_admin_options();
-    }
-}
-' --path=/var/www/html --allow-root
-```
-
-### 5.3 Product Seeding
-Seed the three test catalog items:
-- `Urumi Test Mug` (SKU `URUMI-MUG-001`, ₹299, Accessories)
-- `Wireless Mouse Demo` (SKU `URUMI-MOUSE-001`, ₹799, Electronics)
-- `Notebook Demo` (SKU `URUMI-NOTE-001`, ₹149, Stationery)
+### What `scripts/bootstrap-store.sh` Automates Idempotently:
+1. **WP-CLI Detection & Persistence**: Checks for `/usr/local/bin/wp` in the WordPress container. If absent, downloads `wp-cli.phar`, sets executable permissions, and saves a copy to persistent volume storage (`/var/www/html/wp-cli.phar`) so it survives future container recreations.
+2. **WordPress Core & Permalinks**: Idempotently checks `wp core is-installed`. If not installed, performs installation with site title "Urumi Store Demo" and configures Pretty Permalinks (`/%postname%/`), flushing rewrite rules.
+3. **WooCommerce Installation**: Installs and activates WooCommerce 11.2.1, creating required core pages (`WC_Install::create_pages()`).
+4. **Hardened Local SSL Helper**: Copies [`infra/helm/urumi-platform/files/local-dev-rest-ssl.php`](../../infra/helm/urumi-platform/files/local-dev-rest-ssl.php) into `/var/www/html/wp-content/mu-plugins/` to enable Basic Auth over local HTTP while strictly guarding against non-local activation.
+5. **Store Settings & Shipping Persistence**:
+   - Currency set to `INR` (`₹`).
+   - Cash on Delivery (COD) enabled for physical and virtual items.
+   - Flat Rate shipping method added to Zone 0, with instance options directly persisted in the options table (`woocommerce_flat_rate_{instance_id}_settings`).
+6. **Product Catalog Seeding**: Idempotently synchronizes the 3 required test products:
+   - `Urumi Test Mug` (SKU `URUMI-MUG-001`, ₹299.00, Category: `Accessories`)
+   - `Wireless Mouse Demo` (SKU `URUMI-MOUSE-001`, ₹799.00, Category: `Electronics`)
+   - `Notebook Demo` (SKU `URUMI-NOTE-001`, ₹149.00, Category: `Stationery`)
+7. **REST API Credentials & Kubernetes Secret**:
+   - Checks if Kubernetes Secret `urumi-woocommerce-api` exists.
+   - If missing, creates integration user `urumi-mcp-integration` (role: `shop_manager`), generates read/write consumer keys, creates Kubernetes Secret `urumi-woocommerce-api` in namespace `urumi`, and records credentials in gitignored `.secrets/phase2-store.env` (permissions `0600`) without leaking them to stdout or history.
+8. **Self-Verification**: Runs an authenticated check against `/wp-json/wc/v3/products` to verify HTTP 200 connectivity.
 
 ---
 
@@ -166,13 +141,11 @@ curl -sS http://shop.127.0.0.1.nip.io:8080/shop/ | grep -E "Urumi Test Mug"
 ### 6.2 Primary Acceptance: Browser COD Checkout
 1. Open `http://shop.127.0.0.1.nip.io:8080/shop/` in a web browser.
 2. Add "Urumi Test Mug" to cart and navigate to `/checkout/`.
-3. Enter fictional customer information:
-   - First Name: Aditya, Last Name: Demo
-   - Address: 101 Marine Drive, Mumbai, 400020
-   - Email: demo.customer@urumi.local, Phone: 9876543210
+3. Enter test customer billing details (e.g. Test Customer, Mumbai, Maharashtra).
 4. Select Cash on Delivery (COD) and submit the order.
-5. Verify order receipt at `/checkout/order-received/{order_id}/`.
-6. Verify order details in WooCommerce Admin (`/wp-admin/edit.php?post_type=shop_order`).
+5. Verify order receipt confirmation rendered on the checkout confirmation page.
+6. Verify order details in WooCommerce Admin (`/wp-admin/edit.php?post_type=shop_order`):
+   - Confirmed Order #14 in `processing` status for `INR 299.00` via payment method `cod`.
 
 ### 6.3 REST API Verification (`wc/v3`)
 Retrieve credentials from Kubernetes Secret:
@@ -180,10 +153,10 @@ Retrieve credentials from Kubernetes Secret:
 CK=$(kubectl --context k3d-urumi -n urumi get secret urumi-woocommerce-api -o jsonpath='{.data.consumer-key}' | base64 -d)
 CS=$(kubectl --context k3d-urumi -n urumi get secret urumi-woocommerce-api -o jsonpath='{.data.consumer-secret}' | base64 -d)
 
-# Negative test (expect 401)
+# Negative test (expect 401 Unauthorized)
 curl -sS -I http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products
 
-# Authenticated read (expect 200)
+# Authenticated read (expect 200 OK)
 curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products | jq '.[].name'
 curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/orders | jq '.[].id'
 ```
@@ -210,6 +183,17 @@ curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/orders | j
 
 ## 7. Known Architectural Boundaries & Limitations
 
-1. **Local HTTP Transport**: The local k3d environment operates on plain HTTP (`http://shop.127.0.0.1.nip.io:8080`). In production, TLS termination via Traefik and cert-manager is required to protect credentials in transit.
-2. **Local-Path Storage Failure Boundary**: `local-path` PersistentVolumes store data directly on the host's filesystem. This preserves state across pod crashes, evictions, and rolling replacements, but does not provide off-host replication or multi-node disaster recovery.
-3. **Full-Webroot Persistence Upgrade Boundary**: Because `/var/www/html` is fully mounted from `urumi-wordpress-pvc`, updating the container image tag will not overwrite or upgrade the WordPress installation already residing on that volume. Upgrades must be executed via WP-CLI or Admin.
+1. **Stateful Local Demonstration Environment**:  
+   This deployment is designed as a local, single-node development and verification platform. It validates the stateful store layer before introducing the Team MCP Gateway (Phase 4). It is not an enterprise multi-node high-availability commerce cluster.
+2. **Local-Path Storage Failure Boundary**:  
+   `local-path` PersistentVolumes store data directly on the host's filesystem. This preserves state across pod crashes, evictions, and rolling replacements, but does not provide off-host replication or multi-node disaster recovery.
+3. **Local HTTP Transport & REST SSL Security Boundary**:  
+   The local k3d environment operates on plain HTTP (`http://shop.127.0.0.1.nip.io:8080`). To enable WooCommerce REST API Basic Authentication over local HTTP, a must-use plugin ([`local-dev-rest-ssl.php`](../../infra/helm/urumi-platform/files/local-dev-rest-ssl.php)) is installed.  
+   **Security Boundary Guardrails:**
+   - The plugin explicitly checks `WP_ENVIRONMENT_TYPE` and aborts if configured as staging or production.
+   - The plugin strictly restricts execution to explicit local hostnames (`shop.127.0.0.1.nip.io`, `localhost`, `127.0.0.1`).
+   - The plugin strictly scopes execution to `/wp-json/wc/` routes, setting `$_SERVER['HTTPS'] = 'on'` solely to satisfy WooCommerce's `is_ssl()` requirement. It does NOT bypass authentication; credentials and permissions are still fully validated.
+   - **Production Requirement:** In production, `values-prod.yaml` enables TLS on port 443 with cert-manager. This mu-plugin MUST NOT be deployed to production environments.
+4. **Full-Webroot Persistence Upgrade Boundary**:  
+   Because `/var/www/html` is fully mounted from `urumi-wordpress-pvc`, updating the container image tag will not overwrite or upgrade the WordPress installation already residing on that volume. Upgrades must be executed via WP-CLI or Admin.
+

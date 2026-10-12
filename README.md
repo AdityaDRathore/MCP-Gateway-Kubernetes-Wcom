@@ -200,13 +200,24 @@ kubectl --context k3d-urumi -n urumi rollout status statefulset/urumi-mariadb
 kubectl --context k3d-urumi -n urumi rollout status deployment/urumi-wordpress
 ```
 
-### 7. Access Storefront & Test Order Checkout (COD)
+### 7. Run Deterministic Store Bootstrap
+Run the automated bootstrap script to initialize WordPress, WooCommerce, shipping, products, and API secrets idempotently:
+```bash
+./scripts/bootstrap-store.sh
+```
+What this script automates:
+- **WP-CLI Lifecycle**: Provisions WP-CLI into `/usr/local/bin/wp` and caches it on the persistent volume (`/var/www/html/wp-cli.phar`) to survive container replacements.
+- **Store Configuration**: Pretty permalinks (`/%postname%/`), WooCommerce 11.2.1 activation, INR (`₹`) currency, COD payment gateway, and Flat Rate shipping method in Zone 0.
+- **Product Catalog**: Idempotently seeds `Urumi Test Mug` (₹299), `Wireless Mouse Demo` (₹799), and `Notebook Demo` (₹149).
+- **API Secret Lifecycle**: Automatically creates Kubernetes Secret `urumi-woocommerce-api` (`consumer-key` and `consumer-secret`) and synchronizes local `.secrets/phase2-store.env`.
+
+### 8. Access Storefront & Test Order Checkout (COD)
 - **Storefront URL**: [http://shop.127.0.0.1.nip.io:8080/](http://shop.127.0.0.1.nip.io:8080/)
 - **Catalog**: Browse products at `/shop/` (contains seeded items: `Urumi Test Mug`, `Wireless Mouse Demo`, `Notebook Demo`).
 - **Checkout Flow**: Add any product to cart $\rightarrow$ navigate to `/checkout/` $\rightarrow$ fill test customer details $\rightarrow$ select **Cash on delivery (COD)** $\rightarrow$ Place Order.
 - **Admin Verification**: Inspect orders in WooCommerce Admin at `/wp-admin/edit.php?post_type=shop_order` (verified Order #14 in `processing` status).
 
-### 8. Verify WooCommerce REST API (`/wp-json/wc/v3`)
+### 9. Verify WooCommerce REST API (`/wp-json/wc/v3`)
 Retrieve API consumer credentials from Kubernetes Secret `urumi-woocommerce-api`:
 ```bash
 CK=$(kubectl --context k3d-urumi -n urumi get secret urumi-woocommerce-api -o jsonpath='{.data.consumer-key}' | base64 -d)
@@ -222,7 +233,7 @@ curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products |
 curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/orders | jq '.[].id'
 ```
 
-### 9. Verify Pod Restart Durability & Data Persistence
+### 10. Verify Pod Restart Durability & Data Persistence
 Verify that pod crashes or rolling replacements cause zero data loss:
 ```bash
 # Capture PVC baseline UID

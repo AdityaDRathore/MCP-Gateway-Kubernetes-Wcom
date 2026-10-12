@@ -97,9 +97,8 @@
   - ID 12: `Notebook Demo` | SKU: `URUMI-NOTE-001` | ₹149.00 | Category: `Stationery` | Status: `publish`
 - **Storefront Checkout Execution:**
   - Established customer session, added `Urumi Test Mug` (ID 10) to cart.
-  - Form submitted via Storefront Checkout with customer billing details:
-    Aditya Demo, 101 Marine Drive, Mumbai, 400020, COD payment.
-  - Result: Order generated with `result: success` and redirect to `/checkout/order-received/14/?key=wc_order_RU2yIP5DJ74lk`.
+  - Form submitted via Storefront Checkout with fictional test customer details (COD payment).
+  - Result: Order receipt confirmation verified (`result: success`, order confirmation rendered).
 - **Order Verification in WooCommerce Admin:**
   - Order ID: `14`
   - Status: `processing`
@@ -131,3 +130,23 @@
      - PVC UID: `58d7357d-5671-476d-904a-cda0a12cf269` (retained, unchanged)
      - Data: Products 10, 11, 12 and Order 14 verified intact via REST API and storefront.
 - **Gate 5 Outcome:** **PASS**
+
+---
+
+## 3. Post-Review Hardening & Verification Follow-ups (12 October 2026)
+
+Following external architectural review, the following four hardening actions were completed and verified:
+
+1. **Deterministic, Idempotent Bootstrap Automation (`scripts/bootstrap-store.sh`)**:
+   - Automated end-to-end setup including WP-CLI detection, WordPress core initialization, pretty permalink generation, WooCommerce 11.2.1 installation, store settings, and product seeding.
+   - Idempotently ensures Flat Rate shipping in Zone 0 with direct option persistence (`woocommerce_flat_rate_{id}_settings`) and seeds products (`URUMI-MUG-001`, `URUMI-MOUSE-001`, `URUMI-NOTE-001`).
+   - Execution test passed with exit code 0; re-verified Order #14 and all 3 products intact.
+2. **Automated & Secure WooCommerce API Secret Management**:
+   - `scripts/bootstrap-store.sh` checks for Secret `urumi-woocommerce-api`. If absent, it creates integration user `urumi-mcp-integration`, generates a key pair, creates the Kubernetes Secret, and updates `.secrets/phase2-store.env` without echoing credentials to stdout or history.
+3. **Hardened Local REST SSL Helper (`infra/helm/urumi-platform/files/local-dev-rest-ssl.php`)**:
+   - Committed mu-plugin with explicit `WP_ENVIRONMENT_TYPE` guards (aborts in production/staging), strict hostname filtering (`shop.127.0.0.1.nip.io`, `localhost`, `127.0.0.1`), and path isolation (`/wp-json/wc/`).
+   - Sets `$_SERVER['HTTPS'] = 'on'` strictly to satisfy WooCommerce `is_ssl()` check for Basic Auth over local HTTP without bypassing credential verification. Production TLS termination at Ingress remains required.
+4. **Supply-Chain Digest Pinning & Memory Tuning**:
+   - Helm chart updated to support image digest pinning in templates via `.Values.store.<component>.digest`. Pinned digests for `wordpress:7.1.3-php8.3-apache` and `mariadb:11.4.5` enabled in `values.yaml`.
+   - WordPress memory request tuned to `256Mi` and limit to `512Mi` (from 384Mi) to ensure reliable headroom for CLI PHP processes (WP-CLI) executing alongside Apache worker pools. Verified with Helm upgrade revision 2.
+
