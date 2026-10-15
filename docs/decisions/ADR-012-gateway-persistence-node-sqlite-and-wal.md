@@ -1,39 +1,44 @@
-# ADR-012: Gateway Storage Engine via Node.js Built-in `node:sqlite`, WAL Concurrency, and Online Backup
+# ADR-012: Gateway Storage Engine via Node.js Built-in `node:sqlite`, WAL Concurrency, Permissions, and Disaster Recovery
 
-**Status**: Accepted  
-**Date**: 2026-10-15  
+**Status**: Proposed — Pending Technical Head Approval  
+**Date**: 2026-10-15 (Revised: 2026-10-15)  
 **Decision Makers**: Aditya Rathore (FDE Candidate), Antigravity AI  
-**Related Documents**: [`ADR-001`](./ADR-001-stack-and-deployment.md), [`ADR-004`](./ADR-004-stateful-storage-and-workload-controllers.md)  
+**Related Documents**: [`ADR-001`](./ADR-001-stack-and-deployment.md), [`ADR-004`](./ADR-004-stateful-storage-and-workload-controllers.md), [`ADR-014`](./ADR-014-two-phase-audit-logging-and-retention.md)  
 
 ---
 
 ## 1. Context & Problem Statement
 
-Phase 4 requires persistent storage for the central Team MCP Gateway (`apps/gateway`):
-1. **Entities**: Team member records, hashed API keys, registered upstream configurations, and audit event logs.
-2. **Resource Constraints**: Total host RAM is 7.6 GiB (~1.2–1.4 GiB available). Deploying a separate PostgreSQL or MySQL container consumes 120–180 MiB idle RAM, risking OOM kills.
-3. **Packaging & Supply-Chain Hardening**: Native C++ SQLite modules (e.g. `better-sqlite3`, `sqlite3`) require `python3`, `make`, and `g++` toolchains in container build stages, introduce native ABI vulnerabilities across Node.js versions, and add ~300 MB of build layer bloat.
+Phase 4 requires persistent storage for the central Team MCP Gateway (`apps/gateway`) to maintain users, API keys, registered upstreams, and audit logs across pod replacements.
 
-We must select a zero-compilation SQLite driver, configure concurrent WAL parameters, establish migration versioning, and define an online non-locking backup mechanism.
+We must specify:
+1. File paths, Linux filesystem ownership, and strict file permissions.
+2. Complete disaster recovery, integrity verification, and step-by-step restore procedures.
+3. Migration transaction atomicity and fail-closed startup semantics.
+4. Disk-full behavior under SQLite WAL operation.
 
 ---
 
-## 2. Decision
+## 2. Decision & Technical Architecture
 
-### 2.1 Driver Selection: Built-in `node:sqlite`
-- Adopt Node.js core **`node:sqlite`** (`import { DatabaseSync } from 'node:sqlite'`), natively standard in Node.js 24 LTS.
+### 2.1 Driver Selection & Zero-Compilation Baseline
+- **Driver**: Node.js core **`node:sqlite`** (`import { DatabaseSync } from 'node:sqlite'`), standard in Node.js 24 LTS.
 - **Empirical Proof**: Verified live on Node `v24.20.0` in the local workspace.
-- **Advantages**:
-  - Zero external npm dependencies for database engine.
-  - Zero native C++ compilation (`node-gyp`) during `npm ci` or Docker build.
-  - Zero native ABI mismatch risks across Alpine/Debian or host/container architectures.
-  - Synchronous API (`DatabaseSync`) guarantees strict sequential transaction boundaries with negligible execution overhead (<0.1ms per query).
+- **Benefits**: Eliminates external native C++ modules (`better-sqlite3`, `sqlite3`), removes `python3`/`make`/`g++` build dependencies, and eliminates ABI incompatibilities across Alpine and Debian images.
 
-### 2.2 Database File Location & Persistent Volume Mount
-- **File Path**: `/data/gateway.db`
-- **Volume Mount**: Mounted to a dedicated PersistentVolumeClaim `urumi-gateway-pvc` (500Mi capacity, `storageClassName: local-path`, `accessModes: [ReadWriteOnce]`).
+### 2.2 Storage Layout, File Ownership & Permissions
+- **PVC Mount Directory**: `/data` (Mounted from dedicated PVC `urumi-gateway-pvc`, 500Mi capacity, `local-path` StorageClass).
+- **Primary Database File**: `/data/gateway.db`
+- **WAL & SHM Files**: `/data/gateway.db-wal`, `/data/gateway.db-shm`
+- **Backup Directory**: `/data/backups/`
+- **Ownership**: UID `10001` (user `mcpuser`), GID `10001` (group `mcpuser`), matching pod `securityContext.runAsUser: 10001`.
+- **Permissions**:
+  - Directory `/data`: `0700` (`drwx------`)
+  - Database file `/data/gateway.db`: `0600` (`-rw-------`)
+  - Backup files `/data/backups/gateway-*.db`: `0600` (`-rw-------`)
+- *Rationale*: Group-read and other-read permissions are strictly stripped to prevent unprivileged processes on the shared node from reading database files.
 
-### 2.3 Required PRAGMA Configuration at Startup
+### 2.3 Required PRAGMA Configuration
 Every database initialization executes the following PRAGMAs:
 ```sql
 PRAGMA journal_mode = WAL;
@@ -41,90 +46,127 @@ PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
 PRAGMA synchronous = NORMAL;
 ```
-- **`journal_mode = WAL`**: Write-Ahead Logging allows concurrent readers while a single writer commits, eliminating reader-writer lock starvation.
-- **`foreign_keys = ON`**: Enforces strict referential integrity across relational tables.
-- **`busy_timeout = 5000`**: Queries encountering a temporary lock wait up to 5,000 ms before throwing `SQLITE_BUSY`.
-- **`synchronous = NORMAL`**: In WAL mode, `NORMAL` guarantees full ACID safety across power losses while reducing disk sync fsync operations.
 
-### 2.4 Workload Controller & Single-Writer Invariant
+### 2.4 Workload Controller: Single-Replica & Single-Writer
 - Gateway Deployment is strictly configured with **`replicas: 1`** and **`strategy: { type: Recreate }`**.
-- SQLite does not support multiple writers across distributed pods. `Recreate` ensures the terminating pod unmounts the volume before a replacement pod attempts database initialization.
-
-### 2.5 Schema Migrations & Versioning
-- Migrations are tracked in table `schema_migrations`:
-  ```sql
-  CREATE TABLE IF NOT EXISTS schema_migrations (
-    version INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    applied_at INTEGER NOT NULL
-  );
-  ```
-- Migrations are executed in numerical order within atomic transactions.
-- If the database detects a higher migration version than supported by the running binary, the gateway **fails startup immediately (fails closed)** to prevent data corruption.
-
-### 2.6 Online Non-Locking Backup Strategy
-- Live database backups use SQLite’s native **`VACUUM INTO '<destination_path>'`**.
-- **Empirical Proof**: Verified on live Node 24 that `VACUUM INTO` produces a transactionally consistent, vacuumed database snapshot without copying active WAL files or blocking concurrent readers.
-- Backup procedure copies snapshot to `/data/backups/gateway-<timestamp>.db` and runs `PRAGMA integrity_check;` before confirming success.
+- SQLite does not support distributed multi-writer locks. `Recreate` ensures the terminating pod unmounts the volume before a replacement pod attempts initialization.
 
 ---
 
-## 3. Core Database Schemas
+### 2.5 Migration Transaction Atomicity & Fail-Closed Startup
 
-```sql
--- 1. Users Table
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  username TEXT UNIQUE NOT NULL,
-  display_name TEXT NOT NULL,
-  role TEXT NOT NULL CHECK(role IN ('admin', 'member')),
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
+Database schema migrations are executed under strict transactional rules:
 
--- 2. API Keys Table (Verifier Hash Only, Zero Plaintext)
-CREATE TABLE IF NOT EXISTS api_keys (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  key_prefix TEXT NOT NULL,
-  key_hash TEXT UNIQUE NOT NULL,
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,
-  revoked_at INTEGER DEFAULT NULL
-);
+```typescript
+export function runMigrations(db: DatabaseSync, migrations: Migration[]): void {
+  // Ensure schema_migrations table exists
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at INTEGER NOT NULL
+    );
+  `);
 
--- 3. Upstream Services Table (Secret Reference Only, Zero Plaintext Secrets)
-CREATE TABLE IF NOT EXISTS upstreams (
-  id TEXT PRIMARY KEY,
-  slug TEXT UNIQUE NOT NULL,
-  display_name TEXT NOT NULL,
-  endpoint_url TEXT NOT NULL,
-  timeout_ms INTEGER NOT NULL DEFAULT 10000,
-  is_enabled INTEGER NOT NULL DEFAULT 1 CHECK(is_enabled IN (0, 1)),
-  secret_ref_name TEXT DEFAULT NULL,
-  secret_ref_key TEXT DEFAULT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
+  const currentVersionRow = db.prepare('SELECT MAX(version) as ver FROM schema_migrations').get() as { ver: number | null };
+  const currentVersion = currentVersionRow?.ver ?? 0;
 
--- 4. Audit Log Table (Two-Phase Audit, Zero Customer PII)
-CREATE TABLE IF NOT EXISTS audit_logs (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  upstream_slug TEXT NOT NULL,
-  tool_name TEXT NOT NULL,
-  arguments_hash TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('pending', 'success', 'failed', 'timeout')),
-  duration_ms INTEGER DEFAULT NULL,
-  error_code TEXT DEFAULT NULL,
-  created_at INTEGER NOT NULL,
-  finalized_at INTEGER DEFAULT NULL
-);
+  // 1. Fail-Closed Check: Detect newer schema version
+  const maxCodeVersion = Math.max(...migrations.map((m) => m.version), 0);
+  if (currentVersion > maxCodeVersion) {
+    throw new FatalDatabaseError(
+      `Database schema version (${currentVersion}) is newer than application supported version (${maxCodeVersion}). Startup aborted to prevent corruption.`
+    );
+  }
+
+  // 2. Execute Pending Migrations in Individual Immediate Transactions
+  const pending = migrations.filter((m) => m.version > currentVersion).sort((a, b) => a.version - b.version);
+
+  for (const migration of pending) {
+    db.exec('BEGIN IMMEDIATE TRANSACTION;');
+    try {
+      db.exec(migration.sql);
+      db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?);')
+        .run(migration.version, migration.name, Math.floor(Date.now() / 1000));
+      db.exec('COMMIT;');
+    } catch (err) {
+      db.exec('ROLLBACK;');
+      throw new FatalDatabaseError(`Migration ${migration.version} (${migration.name}) failed. Transaction rolled back. Startup halted. Error: ${err}`);
+    }
+  }
+}
 ```
 
 ---
 
-## 4. Consequences & Verification
-- **Positive**: Zero native compilation dependencies, sub-millisecond query execution, robust relational integrity, clean online backups.
-- **Negative**: Horizontal scaling is constrained to single replica (acceptable and intentional for Phase 4 architecture).
-- **Verification**: Verified via Node 24 evaluation scripts and automated persistence test suite.
+### 2.6 Online Backup, Integrity Verification & Restore Procedures
+
+#### Backup Execution (`backupDatabase()`):
+- Triggered daily via cron or on administrator demand (`POST /admin/v1/database/backup`).
+- Uses SQLite's native non-locking **`VACUUM INTO '<destination_path>'`**:
+  ```typescript
+  const backupFileName = `gateway-${new Date().toISOString().replace(/[:.]/g, '-')}.db`;
+  const backupPath = `/data/backups/${backupFileName}`;
+  
+  // 1. Snapshot database
+  db.exec(`VACUUM INTO '${backupPath}';`);
+  fs.chmodSync(backupPath, 0o600);
+
+  // 2. Immediate Integrity Verification of Snapshot
+  const verifyDb = new DatabaseSync(backupPath);
+  const integrityRow = verifyDb.prepare('PRAGMA integrity_check;').get() as { integrity_check: string };
+  verifyDb.close();
+
+  if (integrityRow.integrity_check !== 'ok') {
+    fs.unlinkSync(backupPath);
+    throw new Error(`Backup integrity check failed: ${integrityRow.integrity_check}`);
+  }
+
+  // 3. Prune Old Backups (Retain last 7 daily snapshots)
+  pruneBackups('/data/backups', 7);
+  ```
+
+#### Step-by-Step Restore Procedure:
+1. **Scale Gateway to 0**:
+   ```bash
+   kubectl -n urumi scale deployment urumi-gateway --replicas=0
+   ```
+2. **Launch Recovery Pod**:
+   Deploy an ephemeral recovery pod mounting `urumi-gateway-pvc` at `/data`.
+3. **Verify Integrity of Selected Backup**:
+   ```bash
+   sqlite3 /data/backups/gateway-<target-timestamp>.db "PRAGMA integrity_check;"
+   # Expected output: ok
+   ```
+4. **Replace Active Database**:
+   ```bash
+   # Remove corrupted or active DB and stale WAL/SHM files
+   rm -f /data/gateway.db /data/gateway.db-wal /data/gateway.db-shm
+   # Copy backup snapshot into primary position
+   cp /data/backups/gateway-<target-timestamp>.db /data/gateway.db
+   chmod 600 /data/gateway.db
+   chown 10001:10001 /data/gateway.db
+   ```
+5. **Scale Gateway to 1**:
+   ```bash
+   kubectl -n urumi scale deployment urumi-gateway --replicas=1
+   ```
+6. **Verify Probes**:
+   Verify `GET /health/ready` returns HTTP 200.
+
+---
+
+### 2.7 Disk-Full Failure Handling
+- **Monitoring**: Alert when `/data` volume usage exceeds 85%.
+- **Behavior**: If disk reaches 100% capacity:
+  - SQLite operations return `SQLITE_FULL`.
+  - Read queries (`SELECT`) continue to function without modification.
+  - Inbound mutating tool calls fail Phase 1 audit-start and are rejected with HTTP 500, preserving fail-closed behavior.
+  - Automatic pruning and temporary WAL truncation procedures trigger to reclaim storage.
+
+---
+
+## 3. Consequences & Verification
+- **Positive**: Strict single-writer data safety, automated daily backups with integrity verification, explicit disaster recovery runbook.
+- **Negative**: Restores require brief downtime (scaling replica to 0).
+- **Verification**: Verified via synthetic corrupt-snapshot rejection tests, migration rollback tests, and simulated restore drills.
