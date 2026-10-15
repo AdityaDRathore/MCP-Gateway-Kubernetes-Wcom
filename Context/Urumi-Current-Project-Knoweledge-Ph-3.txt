@@ -1,0 +1,46 @@
+**Technical Head Decision — G0 Review and Blocker Remediation**
+
+I have reviewed the G0 Read-Only Preflight Report for commit `210d589f2a2658d16766da12617fa03adcab5f56`.
+
+G0 is accepted as a read-only inspection exercise, subject to the remediation and verification below. The overall environment readiness status remains BLOCKED.
+
+### Authorized task: G0-R1 — Restore the existing WooCommerce MCP workload
+
+**Scope:** Resolve the `ImagePullBackOff` condition for the existing `urumi-woocommerce-mcp` workload in the `k3d-urumi` cluster, namespace `urumi`.
+
+Before making changes:
+
+1. Confirm the current cluster context, namespace, deployment, pod events, and image reference.
+2. Inspect the actual Helm-rendered Deployment configuration, including `imagePullPolicy`.
+3. Verify that the host image `urumi-woocommerce-mcp:1.0.0` is the expected image and matches the intended local build.
+4. Confirm that the proposed action will not modify application data, secrets, PVCs, or protected store records.
+
+If the evidence matches the G0 report, you are authorized to execute:
+
+`k3d image import urumi-woocommerce-mcp:1.0.0 -c urumi`
+
+This authorization covers importing the existing image into the local k3d cluster only.
+
+### Required verification
+
+After importing the image:
+
+- Confirm that the existing Deployment can start successfully.
+- Confirm the WooCommerce MCP pod reaches `1/1 Ready`.
+- Confirm the Service has a ready endpoint.
+- Verify the existing `/health` endpoint returns HTTP 200 from the appropriate in-cluster or port-forwarded path.
+- Capture the final pod, Deployment, Service endpoint, and relevant event output.
+- Reconfirm products 10, 11, 12 and protected Order #14 remain unchanged using read-only inspection.
+- Do not run mutating integration tests.
+
+### Prohibited actions
+
+Do not run Helm upgrades, change image references, rebuild or publish images, edit repository files, modify secrets, alter NetworkPolicies, restart unrelated workloads, or change database/store data.
+
+If image import fails, the pod does not become Ready, or the image/configuration differs from the report, stop and return the evidence. Do not improvise additional remediation.
+
+### Deliverable
+
+Return a G0-R1 remediation report containing the commands executed, observed results, image identity, pod readiness, endpoint and health evidence, protected-store baseline comparison, and any unresolved risks.
+
+**Do not begin G1 or gateway implementation.** Wait for explicit Technical Head approval after G0-R1 review.
