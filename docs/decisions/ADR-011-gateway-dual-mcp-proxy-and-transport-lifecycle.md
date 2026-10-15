@@ -46,22 +46,57 @@ Downstream Client B ──(Call 2)──► Gateway Router ──[Shared Client:
 Downstream Client C ──(Call 3)──┘
 ```
 
-#### How Per-Call Cancellation Operates:
-1. Each outbound request through `Client.prototype.request` assigns a unique `messageId: this._requestMessageId++` and registers a dedicated handler in `this._responseHandlers.set(messageId, handler)`.
-2. When a specific call experiences a timeout or client disconnect, its individual `AbortController` fires `signal.abort()`.
-3. The SDK client sends a JSON-RPC cancellation notification to the upstream:
-   ```json
-   {
-     "jsonrpc": "2.0",
-     "method": "notifications/cancelled",
-     "params": {
-       "requestId": 14,
-       "reason": "Request timed out"
+#### Official Public API Pattern for Granular Cancellation:
+
+The gateway application code exclusively uses the official, public `@modelcontextprotocol/sdk` API contract:
+
+```typescript
+// Official public API signature:
+// client.request<T>(request: ClientRequest, resultSchema: ZodSchema<T>, options?: RequestOptions): Promise<T>
+const abortController = new AbortController();
+
+try {
+  const result = await client.request(
+    {
+      method: 'tools/call',
+      params: { name: upstreamToolName, arguments: sanitizedArguments },
+    },
+    CallToolResultSchema,
+    { signal: abortController.signal } // Supported public API!
+  );
+  return result;
+} catch (error) {
+  if (abortController.signal.aborted) {
+    // Handled gracefully as client disconnect or timeout
+    throw new UpstreamCancellationError(`Call to ${upstreamToolName} was aborted`);
+  }
+  throw error;
+}
+```
+
+#### How Supported SDK Cancellation Operates Under the Hood:
+1. When `{ signal: abortController.signal }` is passed into `client.request(...)`, the MCP SDK binds an abort event listener to that specific request message ID.
+2. When the signal fires `abort()`:
+   - The SDK automatically formats and sends the JSON-RPC cancellation notification:
+     ```json
+     {
+       "jsonrpc": "2.0",
+       "method": "notifications/cancelled",
+       "params": {
+         "requestId": 14,
+         "reason": "Request aborted by caller"
+       }
      }
-   }
-   ```
-4. The client deletes **only** `_responseHandlers.get(messageId)` and cleans up timers for that specific `messageId`.
-5. **Shared Transport Isolation Invariant**: The underlying HTTP connection and transport stream **remain completely open**. Unrelated concurrent calls (e.g. Call 2 and Call 3) sharing the same client are completely unaffected and continue executing normally.
+     ```
+   - The SDK rejects the returned Promise with an `AbortError`.
+   - The SDK unbinds only the listener associated with that request ID.
+3. **Shared Transport Isolation Guarantee**: The underlying `StreamableHTTPClientTransport` session remains completely connected and unaffected. Concurrent sibling calls executing on the same client continue uninterrupted.
+4. **No Internal State Manipulation**: The gateway application code **does NOT access or manipulate private SDK properties** (such as `_responseHandlers` or `_requestMessageId`). It relies strictly on the public `RequestOptions.signal` contract.
+5. **Contract Regression Test (`TEST-GTW-SDK-ABORT-PUBLIC-API`)**:
+   - Executes against the pinned `@modelcontextprotocol/sdk@1.32.1` package.
+   - Launches two concurrent tool calls on a shared upstream client.
+   - Aborts call A via `signal.abort()`.
+   - Verifies: (a) Call A promise rejects with `AbortError`; (b) Upstream receives `notifications/cancelled` for call A; (c) Call B completes successfully; (d) The shared client successfully processes subsequent call C.
 
 ---
 

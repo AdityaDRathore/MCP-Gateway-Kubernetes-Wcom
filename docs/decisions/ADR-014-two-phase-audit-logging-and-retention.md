@@ -21,43 +21,41 @@ Critical distributed-systems failure scenarios require explicit handling:
 
 ## 2. Decision & Failure Semantics
 
-### 2.1 Two-Phase Audit Lifecycle Pattern
+### 2.1 Two-Phase Audit Lifecycle Pattern & Schema Alignment
 
-Every tool call through the gateway executes under a strict two-phase audit lifecycle:
+Every tool call through the gateway executes under a strict two-phase audit lifecycle recorded in SQLite:
+
+```sql
+CREATE TABLE audit_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id),
+  upstream_slug TEXT,
+  tool_name TEXT NOT NULL,
+  arguments_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'success', 'failed', 'timeout', 'client_disconnected', 'unconfirmed_outcome')),
+  duration_ms INTEGER,
+  error_code TEXT,
+  error_message TEXT,
+  created_at INTEGER NOT NULL
+);
+```
+
+#### Canonical 6-State Audit Lifecycle State Machine:
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor Client as AI Client / User
-    participant GW as Gateway Router
-    participant DB as SQLite (gateway.db)
-    participant UP as Upstream MCP Server
-
-    Client->>GW: POST /mcp (tools/call)
-    GW->>GW: Authenticate User & Validate Tool Schema
-    GW->>DB: Phase 1: INSERT audit_log (status='pending')
-    alt Audit Start Write Fails (Disk Full / Lock Timeout)
-        DB-->>GW: Write Error
-        GW-->>Client: HTTP 500 / AuditStartError (Upstream NEVER called)
-    else Audit Start Write Succeeds
-        DB-->>GW: Commit OK (audit_id)
-        GW->>UP: Invoke Upstream Tool under Deadline
-        alt Upstream Tool Execution Completes
-            UP-->>GW: Tool Output (Success or Domain Error)
-            GW->>DB: Phase 2: UPDATE audit_log (status='success'|'failed', duration_ms)
-            alt Finalization Write Succeeds
-                DB-->>GW: Commit OK
-                GW-->>Client: Tool Response (HTTP 200)
-            else Finalization Write Fails (Disk Full / SQLite Busy)
-                DB-->>GW: Write Error
-                Note over GW: CRITICAL: Upstream mutation SUCCEEDED!<br/>Do NOT tell client it failed!
-                GW-->>Client: Tool Response (HTTP 200) + Header 'X-Urumi-Audit-Status: finalization-degraded'
-            end
-        else Upstream Timeout / Client Disconnect
-            GW->>DB: Phase 2: UPDATE audit_log (status='timeout'|'client_disconnected', duration_ms)
-            GW-->>Client: Explicit Non-Retryable Error Response
-        end
-    end
+stateDiagram-v2
+    [*] --> pending: Phase 1 Insert (Pre-Execution Write)
+    pending --> success: Phase 2 Commit (Upstream returned result)
+    pending --> failed: Phase 2 Commit (Upstream returned domain error)
+    pending --> timeout: Phase 2 Commit (Call exceeded timeout_ms)
+    pending --> client_disconnected: Phase 2 Commit (Downstream client terminated HTTP socket)
+    pending --> unconfirmed_outcome: Background Reconciliation (Record in 'pending' > timeout + 30s)
+    
+    success --> [*]
+    failed --> [*]
+    timeout --> [*]
+    client_disconnected --> [*]
+    unconfirmed_outcome --> [*]
 ```
 
 ---
@@ -71,13 +69,37 @@ sequenceDiagram
   - *Rationale*: A tool execution that cannot be attributed must never be dispatched to live backends.
 
 #### 2. Audit-Finalization Failure on Successful Mutation (Truthful Reporting Invariant)
-- If an upstream tool call completes successfully (especially a mutating operation like `create_product` or `update_order_status`), but writing the Phase 2 audit update fails:
+- If an upstream tool call completes successfully (especially a mutating operation like `create_product` or `update_order_status`), but writing the Phase 2 audit update fails (e.g. `SQLITE_FULL`):
   - **CRITICAL INVARIANT: The gateway MUST NOT return an error indicating that the tool call failed.**
   - *Why*: If the gateway tells the caller or AI agent that the tool call failed, the agent will assume the side-effect did not occur and will attempt to retry the mutation, causing duplicate products, duplicate orders, or corrupted store states.
-  - **Behavior**:
-    - The gateway returns the **successful upstream tool result** to the client.
-    - The response attaches HTTP header `X-Urumi-Audit-Status: finalization-degraded` and logs a structured alert to container stderr.
-    - The audit record in SQLite remains in `status = 'pending'`, which is flagged for administrative reconciliation.
+  - **Proven Response Contract (Dual MCP `_meta` + HTTP Header Signaling)**:
+    - Standard MCP client libraries (e.g. Claude Code, Claude Desktop, Cursor) consume the JSON-RPC 2.0 response body (`CallToolResult`) and often abstract away HTTP response headers. Therefore, relying solely on an HTTP header would hide the degraded audit condition from the MCP layer.
+    - To satisfy both the MCP protocol client abstraction and infrastructure observability, the gateway employs **dual signaling**:
+      1. **MCP Protocol `_meta` Injection**: The JSON-RPC response body contains the successful tool output in `content`, keeps `isError: false`, and attaches an explicit `_meta` dictionary:
+         ```json
+         {
+           "jsonrpc": "2.0",
+           "id": 14,
+           "result": {
+             "content": [
+               {
+                 "type": "text",
+                 "text": "{\"id\": 15, \"name\": \"Album\", \"status\": \"publish\"}"
+               }
+             ],
+             "isError": false,
+             "_meta": {
+               "urumi_audit_status": "finalization-degraded",
+               "urumi_audit_warning": "Upstream mutation succeeded, but local audit finalization write failed on gateway storage. Do not retry."
+             }
+           }
+         }
+         ```
+         Under the Model Context Protocol specification (`2024-11-05`), `_meta` is the reserved, standard mechanism for execution metadata. The MCP SDK (`@modelcontextprotocol/sdk@1.32.1`) defines `CallToolResultSchema` with `_meta?: Record<string, unknown>`.
+      2. **HTTP Transport Header**: The response HTTP headers include `X-Urumi-Audit-Status: finalization-degraded` for external proxies, API gateways, and curl/HTTP inspectors.
+      3. **Infrastructure Alerting**: The gateway emits a high-priority structured log to container stderr:
+         `{"level": "WARN", "event": "AUDIT_FINALIZATION_DEGRADED", "audit_id": "...", "upstream_slug": "...", "tool_name": "..."}`.
+      4. **Persistent State**: The audit record remains in `status = 'pending'`, which is flagged for automated reconciliation.
 
 #### 3. Client Disconnects & Upstream Timeouts
 - **Client Disconnect**:

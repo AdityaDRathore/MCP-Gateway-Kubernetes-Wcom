@@ -81,7 +81,23 @@ stateDiagram-v2
   2. **Measurement Phase**: 100 total requests generated across 10 concurrent workers targeting fast mock tools (`crm__search_contacts`, `tasks__list_tasks`).
   3. **Metric Calculation**:
      - Latency: Monotonically measured from HTTP request start to response headers end (`performance.now()`).
-     - Percentiles: Calculated via exact sorted array percentile rank: $P_{95} = \text{array}[\lfloor 0.95 \times N \rfloor]$.
+     - **Percentiles (NIST Nearest Rank Method)**:
+       For a sorted ascending array of $N$ latency measurements ($N \ge 1$):
+       $$\text{rank} = \left\lceil \frac{P}{100} \times N \right\rceil$$
+       $$\text{index} = \max(0, \min(N - 1, \text{rank} - 1))$$
+       $$\text{Percentile}(P) = \text{sorted\_latencies}[\text{index}]$$
+
+       Reference TypeScript implementation:
+       ```typescript
+       export function calculatePercentile(latencies: number[], p: number): number {
+         if (latencies.length === 0) return 0;
+         const sorted = [...latencies].sort((a, b) => a - b);
+         const rank = Math.ceil((p / 100) * sorted.length);
+         const index = Math.max(0, Math.min(sorted.length - 1, rank - 1));
+         return sorted[index];
+       }
+       ```
+       *Boundary Guarantee*: For $P = 100$, $\text{rank} = \lceil N \rceil = N \implies \text{index} = N - 1$ (the maximum element, strictly in-bounds). For small samples ($N = 1$), $\text{index} = 0$.
      - Error Rate: $\text{Error Rate} = \frac{\text{Internal Errors (HTTP 500)}}{\text{Total Requests}} \times 100\%$.
   4. **Output Artifact**: Test prints table with p50, p95, p99, memory RSS before/after, and exit code 0 if all targets met.
 

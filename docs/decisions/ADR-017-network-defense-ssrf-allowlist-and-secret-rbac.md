@@ -147,9 +147,89 @@ export function validateAndNormalizeUpstreamUrl(inputUrl: string): ValidatedUpst
 // Any HTTP client or fetch transport connecting to upstreams must be configured with:
 //   redirect: 'error' (in Node.js fetch/undici) or maxRedirects: 0
 // Any 3xx HTTP response returned by an upstream target triggers an immediate SSRF protocol violation.
+
+// Step 12: Pre-Connect DNS Resolution & Socket Address Pinning Hook
+// Hostname validation alone does not prevent DNS rebinding or rogue DNS poisoning.
+// The HTTP transport integrates a custom lookup hook (via http.Agent or undici connect hook):
+export function validateResolvedIp(ip: string, hostname: string): void {
+  // Reject IPv4 and IPv6 loopback addresses
+  if (ip === '127.0.0.1' || ip === '::1' || ip.startsWith('127.')) {
+    throw new SecurityError(`SSRF Violation: Host "${hostname}" resolved to loopback IP "${ip}"`);
+  }
+
+  // Reject Cloud Metadata and Link-Local IPs (169.254.0.0/16, fe80::/10)
+  if (ip.startsWith('169.254.') || ip.toLowerCase().startsWith('fe80:')) {
+    throw new SecurityError(`SSRF Violation: Host "${hostname}" resolved to link-local/metadata IP "${ip}"`);
+  }
+
+  // Enforce Kubernetes Cluster CIDR Boundary (K3s default Flannel: 10.42.0.0/16, Service: 10.43.0.0/16)
+  const isClusterPodIp = ip.startsWith('10.42.');
+  const isClusterServiceIp = ip.startsWith('10.43.');
+  if (!isClusterPodIp && !isClusterServiceIp) {
+    throw new SecurityError(`SSRF Violation: Host "${hostname}" resolved to external/non-cluster IP "${ip}"`);
+  }
+
+  // Explicit Blacklist: Reject Kubernetes API Service IP (10.43.0.1) and MariaDB pod IPs
+  if (ip === '10.43.0.1') {
+    throw new SecurityError(`SSRF Violation: Host "${hostname}" resolved to Kubernetes API server`);
+  }
+}
 ```
 
-### 2.2 Canonical URL Validation Test Matrix (Positive & Negative Test Cases)
+### 2.2 Defense-in-Depth: Egress NetworkPolicy
+
+In addition to application-level URL parsing and pre-connect DNS validation, kernel-level packet filtering enforces network isolation:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: urumi-gateway-egress
+  namespace: urumi
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: gateway
+  policyTypes:
+  - Egress
+  egress:
+  # 1. Allow CoreDNS for cluster internal name resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # 2. Allow egress strictly to approved upstream MCP pods on port 3000
+  - to:
+    - podSelector:
+        matchExpressions:
+        - key: app.kubernetes.io/name
+          operator: In
+          values:
+          - urumi-woocommerce-mcp
+          - urumi-mcp-crm
+          - urumi-mcp-tasks
+    ports:
+    - protocol: TCP
+      port: 3000
+  # 3. Allow egress to Kubernetes API server strictly for dynamic Secret operations
+  - to:
+    - ipBlock:
+        cidr: 10.43.0.1/32
+    ports:
+    - protocol: TCP
+      port: 443
+  # All other egress (MariaDB :3306, WordPress :80, link-local 169.254.169.254, Internet) is DENIED by default.
+```
+
+### 2.3 Canonical URL Validation Test Matrix (Positive & Negative Test Cases)
 
 | Test Case ID | Input URL / Execution Scenario | Expected Result | Exact Rejection / Normalization Rationale |
 |---|---|:---:|---|
@@ -177,7 +257,7 @@ export function validateAndNormalizeUpstreamUrl(inputUrl: string): ValidatedUpst
 
 ---
 
-### 2.3 Kubernetes Secret Lifecycle & RBAC Architecture
+### 2.4 Kubernetes Secret Lifecycle & RBAC Architecture
 
 To isolate dynamic upstream credentials and enforce least privilege:
 
@@ -223,7 +303,7 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: ["get", "create", "update", "delete"]
+  verbs: ["get", "list", "create", "update", "delete"]
 
 ---
 # 3. RoleBinding bridging SA in 'urumi' to Role in 'urumi-gateway-secrets'
@@ -242,53 +322,73 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 ```
 
-#### Negative RBAC Guarantees:
+#### RBAC Scope & Least Privilege Invariants:
+- The `list` verb is **strictly required** for the `reconcileOrphanedSecrets()` background job to discover and sweep orphaned Secrets matching `app.kubernetes.io/managed-by: urumi-gateway`.
+- The `watch` verb is **explicitly omitted** to prevent long-lived streaming watch overhead.
 - `urumi-gateway-sa` has **zero Secret permissions** in `urumi`, `default`, `kube-system`, or any other namespace.
 - It cannot read `urumi-store-secrets` (MariaDB root password) or `urumi-woocommerce-api` (WooCommerce consumer key/secret).
 
 ---
 
-### 2.4 Distributed Compensation Workflow & Crash Recovery
+### 2.5 Distributed Compensation Workflow & Race-Free Crash Recovery
 
-Because Kubernetes etcd and the gateway's SQLite database cannot share a two-phase distributed transaction, the gateway implements a Saga pattern with automatic startup reconciliation:
+Because Kubernetes etcd and the gateway's SQLite database cannot share a two-phase distributed transaction, the gateway implements a Saga pattern with explicit state machines and grace periods to eliminate race conditions between registration and background orphan sweeps:
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Admin as Administrator
     participant GW as Gateway Control Plane
-    participant K8S as K8s API (urumi-gateway-secrets)
     participant DB as SQLite (gateway.db)
+    participant K8S as K8s API (urumi-gateway-secrets)
 
     Admin->>GW: POST /admin/v1/upstreams (with credential)
     GW->>GW: Validate Input & SSRF URL via canonical parser
-    GW->>GW: Generate Secret Name (upstream-sec-<slug>-<uid>)
-    GW->>K8S: Create Secret with labels & annotations
+    GW->>GW: In-Process Lock: activeRegistrations.add(slug)
+    GW->>DB: Step 1: INSERT into upstreams (status='provisioning', created_at=now)
+    GW->>K8S: Step 2: Create Secret (upstream-sec-<slug>-<uid>) with metadata
     alt K8s Secret Creation Fails
         K8S-->>GW: Error (RBAC / Quota / Unreachable)
+        GW->>DB: UPDATE upstreams SET status='failed'
+        GW->>GW: Release In-Process Lock
         GW-->>Admin: HTTP 500 / SecretProvisioningError
     else K8s Secret Creation Succeeds
-        GW->>DB: INSERT into upstreams (secret_ref_name, secret_ref_key)
-        alt SQLite Commit Fails (Disk Full / Constraint Error / Process Crash)
+        GW->>DB: Step 3: UPDATE upstreams SET status='active', is_enabled=1
+        alt SQLite Commit Fails (Disk Full / Constraint / Crash)
             DB-->>GW: SQLite Error
-            GW->>K8S: COMPENSATION: DELETE Secret (upstream-sec-<slug>-<uid>)
+            GW->>K8S: SAGA COMPENSATION: DELETE Secret (upstream-sec-<slug>-<uid>)
+            GW->>GW: Release In-Process Lock
             GW-->>Admin: HTTP 500 / DatabaseTransactionError
         else SQLite Commit Succeeds
+            GW->>GW: Release In-Process Lock
             GW-->>Admin: HTTP 201 Created (Zero Credential in Response)
         end
     end
 ```
 
-#### Crash & Orphan Secret Reconciliation (Startup & Background):
-1. **Labeling Contract**: Every dynamically created Secret is created with:
-   - `labels: { "app.kubernetes.io/managed-by": "urumi-gateway" }`
-   - `annotations: { "urumi.io/created-at": "<epoch_ms>", "urumi.io/upstream-slug": "<slug>" }`
-2. **Reconciliation Procedure (`reconcileOrphanedSecrets()`)**:
+#### Race-Condition Elimination between Registration and Orphan Sweep:
+
+To prevent the background sweep from prematurely deleting a Secret while registration is legitimately in progress or recovering:
+1. **In-Process Registration Lock**:
+   - The gateway maintains an in-memory `Set<string>` of `activeRegistrations`.
+   - The sweep function skips any Secret whose upstream slug exists in `activeRegistrations`.
+2. **SQLite State Lifecycle**:
+   - Upstream rows support: `'provisioning'`, `'active'`, `'disabled'`, `'deleting'`, `'cleanup_required'`, `'failed'`.
+3. **Sweep Algorithm (`reconcileOrphanedSecrets()`) Execution Rules**:
    - Executed once at gateway pod startup and periodically every 15 minutes.
-   - Lists all Secrets in `urumi-gateway-secrets` matching `app.kubernetes.io/managed-by: urumi-gateway`.
-   - Queries SQLite `SELECT secret_ref_name FROM upstreams WHERE secret_ref_name IS NOT NULL;`.
-   - Any Secret present in Kubernetes but absent from SQLite that was created more than **60 seconds ago** is an orphan resulting from a crash between Secret creation and SQLite commit.
-   - The reconciliation job deletes the orphan Secret and logs an operational audit event.
+   - Fetches all Secrets in `urumi-gateway-secrets` matching `app.kubernetes.io/managed-by: urumi-gateway`.
+   - Queries SQLite: `SELECT id, slug, status, secret_ref_name, created_at FROM upstreams WHERE secret_ref_name IS NOT NULL;`.
+   - **Case 1 (Active / Disabled Upstream)**: If the Secret is referenced by a row with `status IN ('active', 'disabled')`, the Secret is legitimate. **No action taken.**
+   - **Case 2 (Provisioning In-Flight vs Crash)**:
+     - If the Secret is referenced by a row with `status = 'provisioning'`:
+       - If `unixepoch() - created_at < 120`: The registration is actively in-flight (HTTP client timeout is 30s). **The sweep leaves the Secret completely untouched.**
+       - If `unixepoch() - created_at >= 120`: The gateway process that initiated registration crashed. The sweep transitions the SQLite row to `status = 'failed'` and safely deletes the orphaned Secret.
+   - **Case 3 (Completely Unreferenced Secret in SQLite)**:
+     - If the Secret has no corresponding row at all in SQLite (e.g. process crashed before Step 1 commit or during rollback):
+       - To eliminate any race condition with transient I/O delays, a Secret with no SQLite record is **only deleted if its Kubernetes `metadata.creationTimestamp` is older than 300 seconds (5 minutes)**.
+       - Any Secret younger than 5 minutes is granted an unconditional grace period and retained until the subsequent sweep.
+   - **Auditing**: Every deleted orphan Secret emits a structured audit record:
+     `{"event": "ORPHAN_SECRET_CLEANUP", "secret_name": "...", "age_seconds": ..., "reason": "..."}`.
 
 #### Deletion Failure & Operator Visibility:
 - When an upstream is deleted (`DELETE /admin/v1/upstreams/:id`):

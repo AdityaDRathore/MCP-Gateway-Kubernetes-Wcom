@@ -97,6 +97,57 @@ export function runMigrations(db: DatabaseSync, migrations: Migration[]): void {
 }
 ```
 
+#### Canonical Migration 001 Core Schema:
+```sql
+-- Migration 001: Initial Core Schema
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('admin', 'member')),
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE api_keys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key_hash TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  revoked_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE upstreams (
+  id TEXT PRIMARY KEY,
+  slug TEXT UNIQUE NOT NULL,
+  display_name TEXT NOT NULL,
+  endpoint_url TEXT NOT NULL,
+  timeout_ms INTEGER NOT NULL DEFAULT 10000 CHECK(timeout_ms BETWEEN 500 AND 30000),
+  is_enabled INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL CHECK(status IN ('provisioning', 'active', 'disabled', 'deleting', 'cleanup_required', 'failed')),
+  secret_ref_name TEXT,
+  secret_ref_key TEXT,
+  cleanup_error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE audit_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id),
+  upstream_slug TEXT,
+  tool_name TEXT NOT NULL,
+  arguments_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'success', 'failed', 'timeout', 'client_disconnected', 'unconfirmed_outcome')),
+  duration_ms INTEGER,
+  error_code TEXT,
+  error_message TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_audit_status_created ON audit_logs(status, created_at);
+CREATE INDEX idx_audit_created ON audit_logs(created_at);
+```
+
 ---
 
 ### 2.6 Online Backup, Integrity Verification & Restore Procedures

@@ -1,8 +1,8 @@
-# Phase 4 — Gate G1 Architecture Decision Register & Contract Specifications (Revised)
+# Phase 4 — Gate G1.1 Architecture Decision Register & Contract Specifications (Focused Remediation)
 
 **Document Type:** Formal Architecture Decision Register & Exact Service Contract Specifications  
-**Gate:** G1 (Freeze Architecture, Decisions & Contracts)  
-**Status:** **REVISED SUBMISSION — PENDING TECHNICAL HEAD RE-REVIEW (NO CODE IMPLEMENTED)**  
+**Gate:** G1.1 (Focused Architecture Decisions & Contracts Remediation)  
+**Status:** **REVISED SUBMISSION (G1.1) — PENDING TECHNICAL HEAD RE-REVIEW (NO CODE IMPLEMENTED)**  
 **Repository:** `AdityaDRathore/MCP-Gateway-Kubernetes-Wcom`  
 **Verified Baseline HEAD:** [`210d589f2a2658d16766da12617fa03adcab5f56`](file:///home/rathore/Documents/Urumi%20Assignment)  
 **Target Cluster:** `k3d-urumi` | **Namespace:** `urumi`  
@@ -10,20 +10,19 @@
 
 ---
 
-## 1. G1 Remediation Correction Log
+## 1. G1.1 Focused Remediation Correction Log
 
-This log maps each of the 8 technical review findings to the corresponding architectural resolution, file changes, and required verification tests:
+This log maps each of the 7 technical head findings to the corresponding architectural resolution, file changes, and required verification tests:
 
-| Finding | Topic | Affected File(s) | Architectural Resolution & Evidence | Verification Test |
-|---|---|---|---|---|
-| **1** | URL allowlist & SSRF validation | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md), [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md) | Authored canonical `validateAndNormalizeUpstreamUrl()` using WHATWG `new URL()`. Reconciled short names to FQDNs. Explicitly blacklisted localhost, 169.254.x.x, K8s API, MariaDB, and WordPress. Authored 21-case test matrix and strict `redirect: 'error'` prohibition. | `TEST-GTW-SSRF-CANONICAL` (21 positive/negative URL & redirect tests) |
-| **2** | K8s Secret lifecycle & RBAC | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | SA `urumi-gateway-sa` in `urumi`; Secrets in `urumi-gateway-secrets`. Exact Role/RoleBinding specified. Saga compensation deletes Secret if SQLite commit fails. `reconcileOrphanedSecrets()` cleans up crash orphans older than 60s. | `TEST-GTW-SECRET-RBAC-COMPENSATE` (Crash compensation & orphan sweep) |
-| **3** | Audit & mutation semantics | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md) | If upstream mutation succeeds but audit finalization fails, gateway returns tool output with header `X-Urumi-Audit-Status: finalization-degraded` (**never falsely reports mutation failed**). Defined pending reconciliation and disk-full handling. | `TEST-GTW-AUDIT-FINALIZATION-DEGRADED` (Finalization failure simulation) |
-| **4** | MCP lifecycle & cancellation | [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md) | Verified per-message cancellation on shared client via `_responseHandlers` map. Shared transport remains open. Defined 5s `DRAINING` deadline. Clarified SDK cancellation does NOT guarantee remote DB rollback. | `TEST-GTW-SHARED-CLIENT-CANCEL` (Single-request abort on shared client) |
-| **5** | SQLite storage & recovery | [`ADR-012`](../decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md) | Specified `/data/gateway.db` permissions (`0600`), backup destination (`/data/backups/`, 7-day retention), step-by-step restore runbook, and migration `BEGIN IMMEDIATE TRANSACTION` fail-closed rules. | `TEST-GTW-SQLITE-DISASTER-RECOVERY` (Restore drill & integrity verification) |
-| **6** | Contracts & consistency | [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md), [`ADR-016`](../decisions/ADR-016-upstream-catalog-snapshot-and-health-tracking.md), [`ADR-018`](../decisions/ADR-018-upstream-mock-contracts-crm-and-tasks.md) | Unreachable upstream tools fail fast (503 `UpstreamUnreachableError`). Timeout bounds unified to 500–30,000ms. In-memory task idempotency (1,000 keys, 24h TTL). Tasks `assignee_contact_id` validated against CRM set. Synthetic data verified. Specified sanitized error mappings and credential leakage prohibition. | `TEST-GTW-CONTRACT-CONSISTENCY` (Schema bounds, assignee validation & error sanitization) |
-| **7** | Performance targets | [`ADR-015`](../decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md) | Explicitly re-classified targets as **PROPOSALS PENDING TECHNICAL HEAD APPROVAL**. Defined 10-call warm-up, 100-request sample, 10 concurrent clients, and exact percentile/error-rate calculation. | `TEST-GTW-LOAD-BENCHMARK` (Automated `load-test.ts` runbook) |
-| **8** | Decision statuses | This Document & all ADRs | Audited all 17 decision areas. Strictly classified every item as VERIFIED FACT, PROPOSED DECISION, or PROPOSAL PENDING APPROVAL. | Document audit review |
+| Priority | Finding Topic | Affected Document(s) | Architectural Resolution & Evidence | Verification Test ID |
+|:---:|---|---|---|---|
+| **P0** | **SSRF Protection Needs Stronger Guarantees** | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md), [`Register`](./phase-4-g1-architecture-decision-register.md) | Multi-layered defense: (1) Lexical WHATWG parser; (2) Pre-connect DNS lookup hook (`validateResolvedIp`) verifying resolved IP is within Cluster CIDR (`10.42.x.x` / `10.43.x.x`), rejecting loopback, metadata (`169.254.x.x`), and K8s API (`10.43.0.1`); (3) Kernel-level Egress `NetworkPolicy` on `urumi-gateway`. | `TEST-GTW-SSRF-DNS-RESOLVER` (DNS resolution & socket address pinning test) |
+| **P1** | **Secret Reconciliation RBAC Incomplete** | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | Added `list` verb to `urumi-gateway-secret-manager` Role in `urumi-gateway-secrets`. Documented that `list` is strictly required for orphan discovery while `watch` is omitted to preserve least privilege. | `TEST-GTW-SECRET-RBAC-LIST` (RBAC list verb verification in secrets namespace) |
+| **P1** | **Audit Status Values Inconsistent** | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md), [`ADR-012`](../decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md), [`Register`](./phase-4-g1-architecture-decision-register.md) | Synchronized DDL and migration plan to exact 6-state lifecycle: `CHECK(status IN ('pending', 'success', 'failed', 'timeout', 'client_disconnected', 'unconfirmed_outcome'))`. Documented state transitions. | `TEST-GTW-AUDIT-STATUS-SCHEMA` (Schema check constraint & lifecycle transition test) |
+| **P1** | **Degraded-Audit Response Contract Not Proven** | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md), [`Register`](./phase-4-g1-architecture-decision-register.md) | Implemented dual signaling: (1) MCP Protocol standard `_meta` field in JSON-RPC body (`result._meta.urumi_audit_status = 'finalization-degraded'`) ensuring MCP clients observe degradation; (2) `content` delivers pristine upstream result with `isError: false`; (3) HTTP header `X-Urumi-Audit-Status: finalization-degraded` for proxy observability. | `TEST-GTW-AUDIT-MCP-META-DEGRADED` (MCP JSON-RPC `_meta` degraded response contract test) |
+| **P1** | **Cancellation Relies on SDK Internals** | [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md), [`Register`](./phase-4-g1-architecture-decision-register.md) | Shifted design to official, supported public SDK API: `client.request(req, schema, { signal: abortController.signal })`. Demoted private properties to internal mechanics explanation. Added contract regression test against installed `@modelcontextprotocol/sdk@1.32.1`. | `TEST-GTW-SDK-ABORT-PUBLIC-API` (Regression test on installed SDK public abort API) |
+| **P1** | **Orphan Sweep Can Race with Registration** | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md), [`Register`](./phase-4-g1-architecture-decision-register.md) | Eliminated race condition: (1) In-process `activeRegistrations` lock; (2) Two-phase SQLite state (`provisioning` -> `active`); (3) Sweep ignores `provisioning` rows $< 120\text{s}$ old; (4) Unreferenced Secrets granted 300s (5-minute) grace period before deletion. | `TEST-GTW-SECRET-SWEEP-NO-RACE` (Registration vs sweep race elimination test) |
+| **P2** | **Benchmark Percentile Calculation Needs Correction** | [`ADR-015`](../decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md), [`Register`](./phase-4-g1-architecture-decision-register.md) | Replaced flawed index formula with NIST Nearest Rank convention: $\text{rank} = \lceil (P/100) \times N \rceil$, $\text{index} = \max(0, \min(N-1, \text{rank}-1))$. Provided reference TypeScript function with explicit boundary clamping. | `TEST-GTW-BENCHMARK-PERCENTILE` (Unit test for percentile calculation edge cases) |
 
 ---
 
@@ -54,21 +53,21 @@ Every decision is explicitly labeled with its governance classification:
 | # | Decision Area | Status | Owning ADR | Technical Architecture & Rationale | Classification |
 |---|---|:---:|---|---|:---:|
 | **1** | MCP SDK, Protocol & Transport Lifecycle | **Proposed** | [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md) | Pinned `@modelcontextprotocol/sdk@1.32.1`, protocol `2024-11-05`. Downstream `/mcp` uses stateless `StreamableHTTPServerTransport` per request. Upstreams use managed `StreamableHTTPClientTransport`. | **PROPOSED DECISION** |
-| **2** | Upstream Client Reuse & Cancellation | **Proposed** | [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md) | Single reusable `Client` per enabled upstream. Shared client cancellation is per-message; transport remains open. **Never blindly retry mutating calls.** | **PROPOSED DECISION** |
+| **2** | Upstream Client Reuse & Cancellation | **Proposed** | [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md) | Single reusable `Client` per enabled upstream. Uses supported public `client.request(req, schema, { signal })` API. Transport remains open during sibling aborts. **Never blindly retry mutating calls.** | **PROPOSED DECISION** |
 | **3** | SQLite Driver Compatibility (Node 24) | **Verified** | [`ADR-012`](../decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md) | Built-in Node.js **`node:sqlite`** (`DatabaseSync`). Zero native C++ compilation (`node-gyp`), zero ABI break risk, zero layer bloat. WAL mode and `VACUUM INTO` verified live on Node 24. | **VERIFIED FACT** |
 | **4** | API Key Format, Verifier & Revocation | **Proposed** | [`ADR-013`](../decisions/ADR-013-api-key-auth-constant-time-and-admin-bootstrap.md) | `urumi_live_<64_hex_chars>` (75 chars). Plaintext shown once. Verifier stored as **SHA-256** in SQLite. Matched via `crypto.timingSafeEqual`. Immediate revocation on next query via `revoked_at`. | **PROPOSED DECISION** |
 | **5** | Secure One-Time Administrator Bootstrap | **Proposed** | [`ADR-013`](../decisions/ADR-013-api-key-auth-constant-time-and-admin-bootstrap.md) | CLI command `node dist/cli/bootstrap.js`. Idempotent: checks for existing admin in `users`; safely halts with exit code 0 if admin exists. Plaintext key printed once. Zero default keys in git. | **PROPOSED DECISION** |
-| **6** | Two-Phase Audit Logging Invariants | **Proposed** | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md) | Phase 1 (Start): Write record before call; **fail closed if write fails**. Phase 2: If upstream mutation succeeds but finalization fails, **return tool output with degraded audit header; do not report failure**. | **PROPOSED DECISION** |
+| **6** | Two-Phase Audit Logging Invariants | **Proposed** | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md) | Phase 1 (Start): Write record before call; **fail closed if write fails**. Phase 2: If upstream mutation succeeds but finalization fails, **return tool output with dual MCP `_meta` + HTTP header degraded status; do not report failure**. 6-state schema lifecycle. | **PROPOSED DECISION** |
 | **7** | Circuit Breaker & Error Classification | **Proposed** | [`ADR-015`](../decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md) | 3 consecutive infrastructure failures (`ECONNREFUSED`, `ETIMEDOUT`, 502–504) trips circuit for 15s. **Business and validation errors (400, 404, 409, isError: true) NEVER trip circuit.** | **PROPOSAL PENDING APPROVAL** |
 | **8** | Concurrency Bounds & Payload Size Caps | **Proposed** | [`ADR-015`](../decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md) | Max **20 global in-flight requests** (429 on overflow). Max **4 in-flight per upstream** (1,000ms FIFO permit queue). Max **64 KiB** request arguments (413). Max **1 MiB** response result. | **PROPOSAL PENDING APPROVAL** |
 | **9** | Health Probes & Catalog Snapshotting | **Proposed** | [`ADR-016`](../decisions/ADR-016-upstream-catalog-snapshot-and-health-tracking.md) | `GET /health/live` (process); `GET /health/ready` (DB + gateway state). **Readiness probe does NOT fail during upstream outage.** Unreachable upstream tools fail fast (503 `UpstreamUnreachableError`). | **PROPOSED DECISION** |
 | **10** | Audit Retention & Pruning Strategy | **Proposed** | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md) | 30-day retention or max 100,000 records. Bounded batch deletions (`LIMIT 500`) to prevent SQLite write lock contention. Periodic maintenance vacuuming. | **PROPOSED DECISION** |
-| **11** | Internal URL Allowlist & SSRF Defense | **Proposed** | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | Canonical WHATWG `URL` parser function. Reconciles short names to FQDNs. Strictly blocks localhost, 169.254.x.x, K8s API, MariaDB, and WordPress directly. Reject userinfo, fragments, credentials, redirects. | **PROPOSED DECISION** |
+| **11** | Multi-Layer SSRF Defense & URL Allowlist | **Proposed** | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | WHATWG `URL` parser + pre-connect DNS resolution hook (`validateResolvedIp`) verifying Cluster CIDR (`10.42.x.x` / `10.43.x.x`) + Egress NetworkPolicy. Strictly blocks localhost, 169.254.x.x, K8s API, MariaDB, WordPress. Prohibits redirects. | **PROPOSED DECISION** |
 | **12** | Ingress Boundary & Private Admin API | **Proposed** | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | Public Ingress routes strictly `POST /mcp` (Bearer auth required). Administrative routes (`/admin/v1/*`) are excluded from Ingress and require `role === 'admin'` (members get 403 Forbidden). | **PROPOSED DECISION** |
 | **13** | Single Gateway Replica & SQLite Concurrency | **Proposed** | [`ADR-012`](../decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md) | `replicas: 1` with `strategy.type: Recreate`. SQLite PRAGMAs: `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 5000`, `synchronous = NORMAL`. File mode `0600`, user `10001:10001`. | **PROPOSED DECISION** |
-| **14** | Performance Targets & Load Test Method | **Proposed** | [`ADR-015`](../decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md) | 10 concurrent clients, 100 fast calls, 0% internal errors, p95 < 1.0s, p99 < 2.0s, delayed calls within timeout + 1s. Defined 10-call warm-up and exact percentile calculation methodology. | **PROPOSAL PENDING APPROVAL** |
+| **14** | Performance Targets & Benchmark Method | **Proposed** | [`ADR-015`](../decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md) | 10 concurrent clients, 100 fast calls, 0% internal errors, p95 < 1.0s, p99 < 2.0s. Defined 10-call warm-up and NIST Nearest Rank percentile formula with edge-case clamping. | **PROPOSAL PENDING APPROVAL** |
 | **15** | CRM & Tasks Schemas, Fixtures & State Reset | **Proposed** | [`ADR-018`](../decisions/ADR-018-upstream-mock-contracts-crm-and-tasks.md) | CRM: 3 synthetic fixtures (`CRM-CONT-001..003`), zero real PII. Tasks: in-memory store initialized with `TASK-001..002`; **resets to baseline on pod restart**; assignee validated against CRM set. | **PROPOSED DECISION** |
-| **16** | Kubernetes Secret Namespace & Compensation | **Proposed** | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | SA `urumi-gateway-sa` in `urumi`; Secrets in `urumi-gateway-secrets`. Saga compensation deletes Secret if SQLite commit fails. `reconcileOrphanedSecrets()` cleans up crash orphans older than 60s. | **PROPOSED DECISION** |
+| **16** | K8s Secret RBAC & Race-Free Sweep | **Proposed** | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | SA in `urumi`; Secrets in `urumi-gateway-secrets`. Role includes `list` verb. Two-phase SQLite registration state + in-process lock + 5-minute grace period eliminates sweep race condition. | **PROPOSED DECISION** |
 | **17** | In-Flight Call Handling on Upstream Changes | **Proposed** | [`ADR-015`](../decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md) | Upstream disable/remove enters `DRAINING` state: immediate 503 for new calls; in-flight calls allowed up to 5s drain deadline; transport and timers closed before DB update. | **PROPOSED DECISION** |
 
 ---
@@ -174,6 +173,80 @@ export const UpdateUpstreamInputSchema = z.object({
   is_enabled: z.boolean().optional(),
   credential_token: z.string().min(1).max(512).optional(),
 });
+### 4.4 Core Database Schema (Migration 001 DDL)
+
+```sql
+-- Migration 001: Initial Core Schema
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('admin', 'member')),
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE api_keys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key_hash TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  revoked_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE upstreams (
+  id TEXT PRIMARY KEY,
+  slug TEXT UNIQUE NOT NULL,
+  display_name TEXT NOT NULL,
+  endpoint_url TEXT NOT NULL,
+  timeout_ms INTEGER NOT NULL DEFAULT 10000 CHECK(timeout_ms BETWEEN 500 AND 30000),
+  is_enabled INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL CHECK(status IN ('provisioning', 'active', 'disabled', 'deleting', 'cleanup_required', 'failed')),
+  secret_ref_name TEXT,
+  secret_ref_key TEXT,
+  cleanup_error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE audit_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id),
+  upstream_slug TEXT,
+  tool_name TEXT NOT NULL,
+  arguments_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'success', 'failed', 'timeout', 'client_disconnected', 'unconfirmed_outcome')),
+  duration_ms INTEGER,
+  error_code TEXT,
+  error_message TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_audit_status_created ON audit_logs(status, created_at);
+CREATE INDEX idx_audit_created ON audit_logs(created_at);
+```
+
+### 4.5 Degraded Audit MCP Protocol Response Contract (`CallToolResult`)
+
+When upstream tool execution succeeds but Phase 2 audit finalization fails (e.g. disk full), the gateway returns an untampered success response with dual-signaling metadata:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 14,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"id\": 15, \"name\": \"Album\", \"status\": \"publish\"}"
+      }
+    ],
+    "isError": false,
+    "_meta": {
+      "urumi_audit_status": "finalization-degraded",
+      "urumi_audit_warning": "Upstream mutation succeeded, but local audit log finalization write failed on gateway storage. Do not retry."
+    }
+  }
+}
 ```
 
 ---
@@ -190,9 +263,20 @@ export const UpdateUpstreamInputSchema = z.object({
 | **GTW-06** | Configurable per-upstream request timeouts (500–30,000ms) | [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md), [`ADR-015`](../decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md) | `test/integration/timeout-cancellation.test.ts` (`TEST-GTW-06-TIMEOUT`) |
 | **GTW-07** | Dynamic upstream management without gateway restart | [`ADR-012`](../decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md), [`ADR-016`](../decisions/ADR-016-upstream-catalog-snapshot-and-health-tracking.md) | `test/integration/dynamic-management.test.ts` (`TEST-GTW-07-DYNAMIC`) |
 | **GTW-08** | Upstream health tracking and resilient gateway readiness | [`ADR-016`](../decisions/ADR-016-upstream-catalog-snapshot-and-health-tracking.md) | `test/integration/health-tracking.test.ts` (`TEST-GTW-08-HEALTH`) |
-| **GTW-09** | Upstream credential isolation (no downstream leakage) | [`ADR-013`](../decisions/ADR-013-api-key-auth-constant-time-and-admin-bootstrap.md), [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | `test/unit/credential-sanitization.test.ts` (`TEST-GTW-09-ISOLATION`) |
+| **GTW-09** | Upstream credential isolation (no downstream leakage) | [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md), [`ADR-013`](../decisions/ADR-013-api-key-auth-constant-time-and-admin-bootstrap.md), [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | `test/unit/credential-sanitization.test.ts` (`TEST-GTW-09-ISOLATION`) |
 | **GTW-10** | Dynamic upstream credentials in K8s Secrets with RBAC | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | `test/integration/k8s-secret-lifecycle.test.ts` (`TEST-GTW-10-SECRETS`) |
 | **GTW-11** | Gateway persistence: SQLite WAL on PVC (`/data/gateway.db`) | [`ADR-012`](../decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md) | `test/integration/sqlite-persistence.test.ts` (`TEST-GTW-11-PERSISTENCE`) |
+| **SEC-01** | SHA-256 API key hashing & timingSafeEqual validation | [`ADR-013`](../decisions/ADR-013-api-key-auth-constant-time-and-admin-bootstrap.md) | `test/unit/api-key-auth.test.ts` (`TEST-SEC-01-AUTH`) |
+| **SEC-02** | Zero customer PII persisted in logs or database | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md), [`ADR-018`](../decisions/ADR-018-upstream-mock-contracts-crm-and-tasks.md) | `test/unit/pii-redaction.test.ts` (`TEST-SEC-02-NO-PII`) |
+| **SEC-03** | Canonical WHATWG URL validation & SSRF defense (21 cases) | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | `test/unit/ssrf-allowlist.test.ts` (`TEST-SEC-03-SSRF`) |
+| **SEC-04** | Pre-connect DNS IP validation & cluster CIDR enforcement | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | `test/unit/ssrf-dns-resolution.test.ts` (`TEST-GTW-SSRF-DNS-RESOLVER`) |
+| **SEC-05** | K8s Secret Role grants `list` verb in `urumi-gateway-secrets` | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | `test/integration/k8s-rbac-list.test.ts` (`TEST-GTW-SECRET-RBAC-LIST`) |
+| **SEC-06** | Orphan sweep race elimination with two-phase state machine | [`ADR-017`](../decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | `test/integration/secret-sweep-race.test.ts` (`TEST-GTW-SECRET-SWEEP-NO-RACE`) |
+| **AUD-01** | Two-phase audit logging (start pending, update outcome) | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md) | `test/unit/audit-lifecycle.test.ts` (`TEST-AUD-01-TWOPHASE`) |
+| **AUD-02** | Immutable audit records with 6-state lifecycle | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md), [`ADR-012`](../decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md) | `test/unit/audit-status-schema.test.ts` (`TEST-GTW-AUDIT-STATUS-SCHEMA`) |
+| **AUD-03** | Fail-closed start; MCP `_meta` degraded response on finalization fail | [`ADR-014`](../decisions/ADR-014-two-phase-audit-logging-and-retention.md) | `test/integration/audit-mcp-meta.test.ts` (`TEST-GTW-AUDIT-MCP-META-DEGRADED`) |
+| **LFC-01** | Supported public SDK abort signal cancellation contract | [`ADR-011`](../decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md) | `test/protocol/sdk-abort-contract.test.ts` (`TEST-GTW-SDK-ABORT-PUBLIC-API`) |
+| **PERF-01** | Benchmark NIST Nearest Rank percentile edge-case handling | [`ADR-015`](../decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md) | `test/unit/benchmark-percentiles.test.ts` (`TEST-GTW-BENCHMARK-PERCENTILE`) |
 
 ---
 
@@ -209,7 +293,7 @@ export const UpdateUpstreamInputSchema = z.object({
 ## 7. Worker Governance Statement & Handoff
 
 In accordance with strict Technical Head instructions:
-- **Authorized Gate:** `G1 — Architecture Decisions and Contracts (Remediation)`
+- **Authorized Gate:** `G1.1 — Architecture Decisions and Contracts (Focused Remediation)`
 - **Output Artifacts:**
   - [`docs/phase-4/phase-4-g1-architecture-decision-register.md`](file:///home/rathore/Documents/Urumi%20Assignment/docs/phase-4/phase-4-g1-architecture-decision-register.md)
   - [`docs/decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md`](file:///home/rathore/Documents/Urumi%20Assignment/docs/decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md)
