@@ -16,9 +16,8 @@
 | **G0-R1** | WooCommerce MCP `ImagePullBackOff` Remediation | **PASS** | Accepted; Workload 1/1 Running, endpoint registered | 2026-10-15 |
 | **G1** | Architecture Decisions & Contracts (ADR-011..ADR-018) | **PASS** | Remediation requested by Technical Head | 2026-10-15 |
 | **G1.1** | Focused Remediation (SSRF, RBAC, Audit, SDK Cancellation) | **APPROVED** | **Formally Approved by Technical Head** | 2026-10-15 |
-| **G2** | CRM and Tasks Mock MCP Services Implementation | **PASS** | Completed with 100% test pass rate across unit and protocol suites | 2026-10-15 |
-| **G3** | Gateway Protocol Skeleton & Health Endpoints | PENDING | Awaiting G2 review & G3 authorization | — |
-| **G4** | SQLite Persistence, API Keys, Bootstrap & Two-Phase Audit | PENDING | Awaiting G3 completion & review | — |
+| **G3** | Gateway Protocol Skeleton & Health Endpoints | **PASS** | Completed with 100% test pass rate across unit and protocol suites | 2026-10-16 |
+| **G4** | SQLite Persistence, API Keys, Bootstrap & Two-Phase Audit | PENDING | Awaiting G3 review & G4 authorization | — |
 | **G5** | Upstream Aggregation Manager & Dynamic Tool Catalog | PENDING | Awaiting G4 completion & review | — |
 | **G6** | Gateway Router, Deadlines, Concurrency & Resilience | PENDING | Awaiting G5 completion & review | — |
 | **G7** | Dynamic Admin API & Kubernetes Secret Lifecycle | PENDING | Awaiting G6 completion & review | — |
@@ -88,3 +87,55 @@
   - Zero Kubernetes cluster resources mutated or deployed.
   - Zero live WooCommerce store records modified.
   - Strict Node 24 LTS (`v24.20.0`) runtime compliance.
+
+### 6. Gate G3: Gateway Skeleton and Downstream MCP Protocol Implementation
+- **Timestamp:** 2026-10-16T14:30:00Z
+- **Status:** **PASS (IMPLEMENTED AND FULLY VERIFIED)**
+- **Scope Implemented (`apps/gateway`):**
+  - **Strict Configuration (`src/config.ts`):**
+    - Actively enforced settings: `PORT` (1024..65535, default 3000), `HOST` (default 0.0.0.0), `NODE_ENV` (production/development/test), `LOG_LEVEL` (debug/info/warn/error), `DEFAULT_UPSTREAM_TIMEOUT_MS` strictly bounded to 500..30000ms (ADR-011 Section 2.7), `MAX_PAYLOAD_SIZE_BYTES` (default 64 KiB), `DRAIN_TIMEOUT_MS` (500..15000ms, default 5000ms).
+    - Explicitly reserved settings: `DB_PATH` (G4 SQLite WAL), `MAX_RESULT_SIZE_BYTES` (G6 Router result cap), `GLOBAL_CONCURRENCY_LIMIT` (G6 Router global permit pool), `PER_UPSTREAM_CONCURRENCY_LIMIT` (G6 Router per-upstream pool).
+    - Pure `parseConfig` function throwing descriptive errors, cached `loadConfig`, and `Object.freeze` immutability.
+  - **Fail-Closed Authentication Boundary (`src/auth/`):**
+    - `FailClosedAuthenticator`: Production authenticator unconditionally returns `null`, failing closed safely.
+    - Zero auth-bypass environment variables or development backdoors.
+    - `FakeAuthenticator`: In-memory test helper strictly confined to test constructors.
+    - `createAuthMiddleware`: Enforces `Authorization: Bearer <token>`, rejecting missing/malformed/unverified credentials with HTTP 401 before body parsing or MCP dispatch.
+  - **Operational Health Probes (`src/http/health.ts`):**
+    - `GET /health/live`: Checks process loop, returns HTTP 200 `{"status":"ok","service":"urumi-gateway"}`.
+    - `GET /health/ready`: Decoupled readiness probe evaluating local gateway configuration and initialization only (ADR-016); returns HTTP 200 when ready, HTTP 503 when degraded. Zero upstream outage coupling.
+    - `GET /health`: General operational health probe returning HTTP 200.
+  - **Reserved Admin Router (`src/http/admin.ts`):**
+    - Mounted at `/admin/v1`.
+    - Unauthenticated requests receive HTTP 401; non-admin (`member`) role receives HTTP 403 Forbidden.
+    - Authenticated admin requests receive HTTP 501 Not Implemented across all subpaths (`/admin/v1/*`) and all HTTP methods (`GET`, `POST`, `PATCH`, `DELETE`, `PUT`).
+    - Verified absent from MCP tool definitions.
+  - **Downstream MCP Protocol Endpoint (`src/server.ts`):**
+    - Stateless Streamable HTTP over `POST /mcp` using pinned `@modelcontextprotocol/sdk@1.32.1`.
+    - Strict pre-dispatch validations: HTTP 405 Method Not Allowed on non-POST, HTTP 415 Unsupported Media Type on non-JSON, HTTP 401 on unauthenticated, HTTP 400 Bad Request on malformed JSON syntax, and HTTP 413 Payload Too Large on bodies > 64 KiB.
+    - Ephemeral `McpServer` and `StreamableHTTPServerTransport` per request.
+    - Idempotent multi-event transport lifecycle cleanup guard registered across `res.on('finish')`, `res.on('close')`, and `req.on('error')`.
+  - **Structured Redacted Logger (`src/logging/logger.ts`):**
+    - Deep recursive traversal of objects and arrays.
+    - Scans and scrubs Bearer headers, Urumi API keys (`urumi_live_...`), passwords, tokens, secrets, cookie headers, and real customer emails, while preserving RFC-compliant synthetic fixtures (`.mock`).
+    - Stack trace sanitization preventing internal topology disclosure.
+  - **Graceful Shutdown Coordinator (`src/lifecycle.ts`):**
+    - Socket connection tracking, `SIGTERM` and `SIGINT` signal handlers.
+    - Server closure with bounded 5-second connection drain deadline (`DRAIN_TIMEOUT_MS`).
+    - Automatic fallback to forceful socket destruction and clean process exit (`process.exit(0)`).
+  - **Contract Regression Test (`TEST-GTW-SDK-ABORT-PUBLIC-API` in `test/protocol/sdk-cancellation.test.ts`):**
+    - Validates pinned `@modelcontextprotocol/sdk@1.32.1` `RequestOptions.signal` cancellation contract.
+    - Shared upstream client multiplexing two concurrent tool calls: Call A cancelled via `signal.abort()`, receives `notifications/cancelled`, Call B completes successfully, subsequent Call C on shared client succeeds.
+  - **Test Results:**
+    - Gateway Unit Tests (`test/unit/*.test.ts`): **29 passed, 0 failed** across 6 suites (Config, Auth, Health, Admin, Logger, Shutdown).
+    - Gateway Protocol Tests (`test/protocol/*.test.ts`): **2 passed, 0 failed** across 2 suites (MCP Protocol Handshake, SDK Cancellation Regression).
+    - Monorepo Test Suite (`npm test`): **100% pass rate** across all workspaces (`mcp-crm`, `mcp-tasks`, `woocommerce-mcp`, `gateway`).
+    - Monorepo Build (`npm run build`): **5 workspaces compiled cleanly** with 0 TypeScript errors.
+- **Invariants Preserved:**
+  - Zero code written for SQLite persistence or migrations (strictly reserved for Gate G4).
+  - Zero code written for Upstream Aggregation Manager (strictly reserved for Gate G5).
+  - Zero code written for Upstream Router or Circuit Breakers (strictly reserved for Gate G6).
+  - Zero Kubernetes cluster resources mutated or deployed.
+  - Zero live WooCommerce store records modified (products 10/11/12 and Order #14 untouched).
+  - Strict Node 24 LTS (`v24.20.0`) runtime compliance.
+
