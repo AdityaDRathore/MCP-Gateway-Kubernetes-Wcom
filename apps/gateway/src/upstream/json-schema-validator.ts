@@ -1,13 +1,25 @@
 /**
  * Real JSON Schema Validator for Gate G6.
- * Validates tool call arguments against discovered JSON Schema (Draft-07 / 2020-12 compatible subset).
+ * 
+ * Explicit Supported JSON Schema Subset (Draft-07 / Draft 2020-12):
+ * - Root: type: 'object'
+ * - Object: properties, required, additionalProperties (boolean or schema object)
+ * - Types: 'string', 'number', 'integer' (with float rejection), 'boolean', 'array', 'object', 'null' (and type unions, e.g. ['string', 'null'])
+ * - Numeric Constraints: minimum, maximum, exclusiveMinimum, exclusiveMaximum
+ * - String Constraints: minLength, maxLength, pattern
+ * - Array Constraints: items (schema object for all items), minItems, maxItems
+ * - Value Constraints: enum (deep JSON value equality), const (deep JSON value equality), nullable: boolean
  * 
  * Non-Negotiable Invariants:
  * - Pure validation: never mutates, coerces, or injects arguments.
- * - Deep recursive validation of nested objects, arrays, enums, numeric bounds, string patterns/lengths.
- * - Strict additionalProperties: false enforcement.
- * - Zero external dependencies.
+ * - Deep recursive validation of nested objects and arrays up to maximum depth of 16.
+ * - Strict required-property presence validation: checks presence; nullability is validated by property schema.
+ * - Unsupported keywords (e.g. oneOf, anyOf, allOf, not, $ref, patternProperties) are explicitly rejected
+ *   rather than silently ignored.
+ * - Zero external npm dependencies (uses native Node.js isDeepStrictEqual).
  */
+
+import { isDeepStrictEqual } from 'node:util';
 
 export interface SchemaValidationError {
   readonly path: string;
@@ -17,6 +29,48 @@ export interface SchemaValidationError {
 export interface ValidationResult {
   readonly valid: boolean;
   readonly errors: readonly SchemaValidationError[];
+}
+
+export const UNSUPPORTED_SCHEMA_KEYWORDS = [
+  'allOf',
+  'anyOf',
+  'oneOf',
+  'not',
+  '$ref',
+  '$defs',
+  'definitions',
+  'if',
+  'then',
+  'else',
+  'patternProperties',
+  'propertyNames',
+  'dependencies',
+  'dependentRequired',
+  'dependentSchemas',
+  'contains',
+  'minContains',
+  'maxContains',
+  'uniqueItems',
+  'prefixItems',
+  'multipleOf',
+] as const;
+
+/**
+ * Checks for unsupported JSON Schema keywords and records errors if found.
+ */
+function checkUnsupportedKeywords(
+  schema: Record<string, unknown>,
+  path: string,
+  errors: SchemaValidationError[]
+): void {
+  for (const kw of UNSUPPORTED_SCHEMA_KEYWORDS) {
+    if (kw in schema) {
+      errors.push({
+        path: path === '#' ? `#/${kw}` : `${path}/${kw}`,
+        message: `Unsupported JSON Schema keyword '${kw}'. Gateway supports explicit core subset: type, properties, required, additionalProperties, items, minItems, maxItems, minLength, maxLength, pattern, minimum, maximum, exclusiveMinimum, exclusiveMaximum, enum, const, nullable.`,
+      });
+    }
+  }
 }
 
 /**
@@ -34,6 +88,12 @@ export function validateToolArguments(
       valid: false,
       errors: [{ path: '#', message: 'Tool inputSchema must be a valid JSON Schema object' }],
     };
+  }
+
+  // Check for unsupported keywords on root schema
+  checkUnsupportedKeywords(schema, '#', errors);
+  if (errors.length > 0) {
+    return { valid: false, errors };
   }
 
   // Root schema must declare type: 'object'
@@ -87,19 +147,22 @@ function validateObject(
     return;
   }
 
-  // 1. Check required properties
+  // Check for unsupported keywords on this object schema
+  checkUnsupportedKeywords(schema, currentPath, errors);
+
+  // 1. Check required property presence
+  // Per JSON Schema specification: 'required' checks whether the property key exists on the instance.
+  // Whether the value is null, empty string, etc. is validated by the property's own schema.
   if (Array.isArray(schema.required)) {
     for (const reqKey of schema.required) {
-      if (typeof reqKey === 'string' && (obj[reqKey] === undefined || obj[reqKey] === null)) {
-        // If property allows null via nullable or type: ['...', 'null'], null is acceptable
-        const propSchema = (schema.properties as Record<string, unknown> | undefined)?.[reqKey];
-        if (obj[reqKey] === null && isNullable(propSchema)) {
-          continue;
+      if (typeof reqKey === 'string') {
+        const isPresent = Object.prototype.hasOwnProperty.call(obj, reqKey) && obj[reqKey] !== undefined;
+        if (!isPresent) {
+          errors.push({
+            path: currentPath === '#' ? `#/${reqKey}` : `${currentPath}/${reqKey}`,
+            message: `Required property '${reqKey}' is missing`,
+          });
         }
-        errors.push({
-          path: currentPath === '#' ? `#/${reqKey}` : `${currentPath}/${reqKey}`,
-          message: `Required property '${reqKey}' is missing or undefined`,
-        });
       }
     }
   }
@@ -132,8 +195,10 @@ function isNullable(schema: unknown): boolean {
   if (!schema || typeof schema !== 'object') return false;
   const s = schema as Record<string, unknown>;
   if (s.nullable === true) return true;
-  if (Array.isArray(s.type) && s.type.includes('null')) return true;
   if (s.type === 'null') return true;
+  if (Array.isArray(s.type) && s.type.includes('null')) return true;
+  if (Array.isArray(s.enum) && s.enum.some((v) => v === null)) return true;
+  if ('const' in s && s.const === null) return true;
   return false;
 }
 
@@ -144,6 +209,9 @@ function validateValue(
   errors: SchemaValidationError[],
   depth: number
 ): void {
+  // Check for unsupported keywords on this property/value schema
+  checkUnsupportedKeywords(schema, path, errors);
+
   // Check nullability
   if (value === null) {
     if (!isNullable(schema)) {
@@ -157,9 +225,9 @@ function validateValue(
     return;
   }
 
-  // Enum validation
+  // Enum validation (deep JSON value equality for primitives, objects, and arrays)
   if (Array.isArray(schema.enum)) {
-    const matched = schema.enum.some((allowed) => allowed === value);
+    const matched = schema.enum.some((allowed) => isDeepStrictEqual(allowed, value));
     if (!matched) {
       errors.push({
         path,
@@ -169,9 +237,9 @@ function validateValue(
     }
   }
 
-  // Const validation
+  // Const validation (deep JSON value equality)
   if ('const' in schema) {
-    if (schema.const !== value) {
+    if (!isDeepStrictEqual(schema.const, value)) {
       errors.push({
         path,
         message: `Value must be strictly equal to const ${JSON.stringify(schema.const)}, received ${JSON.stringify(value)}`,

@@ -355,26 +355,31 @@
 
 ### 10. Gate G6: Dynamic Tool Router, Bounded Execution, and Failure Isolation
 - **Timestamp:** 2026-10-17T20:05:00Z
-- **Status:** **PASS (IMPLEMENTED AND FULLY VERIFIED)**
-- **Technical Head Conditions & Review Blockers Resolved:**
-  1. **HTTP Client Disconnect Lifecycle:** Configured downstream connection listener on `res.on('close')` guarded with `!res.writableEnded` rather than ambiguous `req.on('close')`, ensuring premature client drops abort upstream calls, release concurrency permits, and record `client_disconnected` / `unconfirmed_outcome` without false positives.
-  2. **Audit Degradation Contract Compliance (ADR-014):** Preserved exact contract where local SQLite storage failure during Phase 2 finalization leaves the record `pending` (for subsequent background reconciliation), while returning the pristine tool result with dual signaling: `result._meta.urumi_audit_status = 'finalization-degraded'` and HTTP header `X-Urumi-Audit-Status: finalization-degraded`.
-  3. **Recursive Zero-Dependency JSON Schema Validator:** Implemented complete Draft-07 / 2020-12 validator (`json-schema-validator.ts`) enforcing types (`string`, `number`, `integer` with float rejection, `boolean`, `array`, `object`, `null`), numeric bounds (`minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`), string constraints (`minLength`, `maxLength`, `pattern`), `enum`, `const`, nested structures up to depth 16, and `additionalProperties: false`.
-  4. **Atomic Circuit Breaker & Epoch Tracking:** Implemented per-upstream state machine (`closed`, `open`, `half_open`) with atomic permit reservation (`tryAcquirePermit`), epoch tracking to discard delayed responses across transition cycles, isolated probe slot in half-open, and `recordAbort()` ensuring client-side cancellations and schema validation rejections never penalize the upstream breaker.
-  5. **Hierarchical Concurrency & Deadline Accounting:** Enforced global concurrency (20) and per-upstream concurrency (4) with bounded queueing (10). Upstream wait queue duration is deducted from the upstream execution deadline; timed out or cancelled requests are dequeued and rolled back cleanly.
-  6. **Explicit Mutation Registry & Response Size Caps:** Implemented explicit tool dictionary (`woocommerce__create_product`, `woocommerce__update_order_status`, `tasks__create_task`, `tasks__update_task_status`), annotation-aware checks (`audience`, `idempotency`), safe prefix heuristics, and fail-closed mutating default. Capped response payloads at `MAX_RESULT_SIZE_BYTES` (default 1 MiB) with safe error reporting to prevent client memory exhaustion.
+- **Status:** **PASS (IMPLEMENTED, REMEDIATED, AND FULLY VERIFIED)**
+- **Initial Implementation Git Commit:** `c441857`
+- **Remediation Details (Technical Head Review):**
+  1. **Strict Required-Property Presence Separation:** Decoupled `required` keyword presence check from property value nullability. Property presence checks `Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined`. Whether `null` is acceptable is delegated to the property schema's type constraints (`nullable: true`, `type: 'null'`, or `type: ['...', 'null']`).
+  2. **Deep JSON Value Equality in Enum and Const:** Replaced strict reference equality (`===`) with recursive deep equality (`node:util.isDeepStrictEqual`) for structured objects and arrays in `enum` and `const` constraints, allowing distinct object/array references with matching JSON structures to validate correctly.
+  3. **Explicit Supported JSON Schema Subset & Unsupported Keyword Rejection:** Documented the exact supported schema subset (Draft-07 / 2020-12 core). Explicitly rejects unsupported keywords (`allOf`, `anyOf`, `oneOf`, `not`, `$ref`, `$defs`, `definitions`, `if`, `then`, `else`, `patternProperties`, `propertyNames`, `dependencies`, `dependentRequired`, `dependentSchemas`, `contains`, `minContains`, `maxContains`, `uniqueItems`, `prefixItems`, `multipleOf`) with clear validation errors rather than silently accepting or ignoring them.
+  4. **Concurrency Limiter Permit Accounting & Listener Cleanup:**
+     - Removed redundant `activeGlobalCount++` during slot handover in `releaseSlot()`; global permits are allocated upon `acquire()` entry and held throughout queue wait and execution, guaranteeing exact permit balance (`activeGlobalCount === 0` when all calls complete).
+     - Instrumented `QueuedItem.cleanup()` to remove `abort` listeners from client `AbortSignal` and clear queue wait timers upon resolve, reject, timeout, abort, or shutdown, eliminating listener leaks and race conditions.
+  5. **HTTP Client Disconnect Lifecycle:** Configured downstream connection listener on `res.on('close')` guarded with `!res.writableEnded` rather than ambiguous `req.on('close')`, ensuring premature client drops abort upstream calls, release concurrency permits, and record `client_disconnected` / `unconfirmed_outcome` without false positives.
+  6. **Audit Degradation Contract Compliance (ADR-014):** Preserved exact contract where local SQLite storage failure during Phase 2 finalization leaves the record `pending` (for subsequent background reconciliation), while returning the pristine tool result with dual signaling: `result._meta.urumi_audit_status = 'finalization-degraded'` and HTTP header `X-Urumi-Audit-Status: finalization-degraded`.
+  7. **Atomic Circuit Breaker & Epoch Tracking:** Implemented per-upstream state machine (`closed`, `open`, `half_open`) with atomic permit reservation (`tryAcquirePermit`), epoch tracking to discard delayed responses across transition cycles, isolated probe slot in half-open, and `recordAbort()` ensuring client-side cancellations and schema validation rejections never penalize the upstream breaker.
+  8. **Explicit Mutation Registry & Response Size Caps:** Implemented explicit tool dictionary (`woocommerce__create_product`, `woocommerce__update_order_status`, `tasks__create_task`, `tasks__update_task_status`), annotation-aware checks (`audience`, `idempotency`), safe prefix heuristics, and fail-closed mutating default. Capped response payloads at `MAX_RESULT_SIZE_BYTES` (default 1 MiB) with safe error reporting to prevent client memory exhaustion.
 - **Scope Implemented (`apps/gateway`):**
-  - **JSON Schema Validator (`src/upstream/json-schema-validator.ts`):** High-performance recursive schema validation engine without external runtime dependencies.
+  - **JSON Schema Validator (`src/upstream/json-schema-validator.ts`):** High-performance recursive schema validation engine with deep equality and explicit unsupported keyword rejection.
   - **Circuit Breaker (`src/upstream/circuit-breaker.ts`):** Per-upstream failure isolation state machine (threshold 3, reset 15s, 1 half-open probe) with epoch tracking and infrastructure error classification.
-  - **Hierarchical Concurrency Limiter (`src/upstream/concurrency-limiter.ts`):** Dual-tier permit manager with deadline deduction, wait-queue boundaries, and cancellation cleanup.
+  - **Hierarchical Concurrency Limiter (`src/upstream/concurrency-limiter.ts`):** Dual-tier permit manager with deadline deduction, wait-queue boundaries, balanced global permit accounting, and listener cleanup.
   - **Dynamic Tool Router (`src/upstream/tool-router.ts`):** Dispatch engine linking dynamic catalog resolution, circuit breaker permits, input schema validation, fail-closed Phase 1 audit logging, hierarchical concurrency, bounded execution timeouts, client abort detection, response size validation, and Phase 2 audit finalization.
   - **Managed Upstream Client Execution (`src/upstream/upstream-client.ts`):** Added `callTool(toolName, args, options)` with scoped AbortSignal propagation and timeout retrieval.
   - **Server & Downstream MCP Wiring (`src/server.ts`, `src/index.ts`):** Connected `ToolRouter` to downstream `POST /mcp` tool execution handler, instrumented `res.on('close')` client disconnect handling, and registered graceful shutdown hooks draining concurrency pools.
-- **Test Evidence (Gate G6 Completion):**
-  - **Gateway Unit Tests (`npm --workspace=gateway run test:unit`):** **145 passed, 0 failed across 21 suites**:
-    - `json-schema-validator.test.ts`: 11 tests (primitives, integers vs floats, bounds, regex, enums, consts, nested objects, array items, additionalProperties rejection, depth limit)
+- **Test Evidence (Gate G6 Completion & Remediation):**
+  - **Gateway Unit Tests (`npm --workspace=gateway run test:unit`):** **151 passed, 0 failed across 21 suites**:
+    - `json-schema-validator.test.ts`: **14 tests** (expanded from 11: primitives, integers vs floats, bounds, regex, enums, consts, nested objects, array items, additionalProperties rejection, depth limit, required properties with permitted vs non-permitted nulls, deep equality for structured objects/arrays in enum and const, explicit rejection of unsupported keywords)
     - `circuit-breaker.test.ts`: 8 tests (initial closed state, trip to open at threshold 3, rejection when open, reset timeout transition to half-open, probe success recovery, probe failure re-trip, client abort isolation, per-upstream failure isolation)
-    - `concurrency-limiter.test.ts`: 7 tests (global limit 20, per-upstream limit 4, queue wait deadline deduction, client cancellation dequeuing, upstream acquisition rollback, bounded queue rejection, graceful shutdown drain)
+    - `concurrency-limiter.test.ts`: **10 tests** (expanded from 7: global limit 20, per-upstream limit 4, queue wait deadline deduction, client cancellation dequeuing, upstream acquisition rollback, bounded queue rejection, graceful shutdown drain, exact zero global permit balance across sequentially dequeued operations, post-resolution abort listener cleanup, shutdown drain permit recovery)
     - `tool-router.test.ts`: 11 tests (unknown tool rejection, catalog unreachable fast-fail, schema validation before dispatch, mutation classification, Phase 1 audit fail-closed, confirmed upstream execution with Phase 2 success, tool-level error handling without breaker trip, mutating timeout unconfirmed_outcome without retry, read-only timeout classification, Phase 2 audit degradation dual signaling, MAX_RESULT_SIZE_BYTES response cap)
     - `catalog-service.test.ts`: 10 tests
     - `ssrf-url-validator.test.ts`: 13 tests
@@ -399,11 +404,11 @@
     - `upstream-discovery.test.ts`: 3 tests (live upstream tool discovery, failure isolation, deduplication)
     - `mcp-protocol.test.ts`: 2 tests (protocol handshake, auth rejection, client premature disconnect)
     - `sdk-cancellation.test.ts`: 1 test (request-ID correlated abort with sibling isolation)
-  - **Gateway Total:** **153 passed, 0 failed across 26 suites**
+  - **Gateway Total:** **159 passed, 0 failed across 26 suites**
   - **Monorepo Build (`npm run build`):** Clean build across all 5 workspaces with 0 TypeScript errors.
   - **Monorepo Lint (`npm run lint`):** 0 lint errors across all workspaces.
-  - **Monorepo Tests (`npm test`):** **295 passed, 0 failed across 4 workspaces**:
-    - `apps/gateway`: 153 passed (145 unit, 8 protocol)
+  - **Monorepo Tests (`npm test`):** **301 passed, 0 failed across 4 workspaces**:
+    - `apps/gateway`: 159 passed (151 unit, 8 protocol)
     - `apps/woocommerce-mcp`: 81 passed (46 unit, 35 protocol)
     - `apps/mcp-tasks`: 35 passed (27 unit, 8 protocol)
     - `apps/mcp-crm`: 26 passed (20 unit, 6 protocol)

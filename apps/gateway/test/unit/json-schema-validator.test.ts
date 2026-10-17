@@ -247,4 +247,150 @@ describe('Gateway JSON Schema Argument Validator Unit Tests', () => {
     assert.equal(strictResult.valid, false);
     assert.match(strictResult.errors[0].message, /Value cannot be null/);
   });
+
+  it('handles required properties with null values according to property schema nullability', () => {
+    const schema = {
+      type: 'object',
+      required: ['nullableRequired', 'unionRequired', 'strictRequired'],
+      properties: {
+        nullableRequired: { type: 'string', nullable: true },
+        unionRequired: { type: ['string', 'null'] },
+        strictRequired: { type: 'string' },
+      },
+    };
+
+    // Both nullableRequired and unionRequired allow null; strictRequired does not
+    const result = validateToolArguments(schema, {
+      nullableRequired: null,
+      unionRequired: null,
+      strictRequired: null,
+    });
+
+    assert.equal(result.valid, false);
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.errors[0].path, '#/strictRequired');
+    assert.match(result.errors[0].message, /Value cannot be null/);
+
+    // Completely missing required property
+    const missingResult = validateToolArguments(schema, {
+      nullableRequired: null,
+      unionRequired: null,
+    });
+    assert.equal(missingResult.valid, false);
+    assert.ok(missingResult.errors.some((e) => e.path === '#/strictRequired' && e.message.includes('Required property')));
+
+    // All required satisfied with valid values including permitted nulls
+    const validResult = validateToolArguments(schema, {
+      nullableRequired: null,
+      unionRequired: null,
+      strictRequired: 'valid-string',
+    });
+    assert.equal(validResult.valid, true);
+  });
+
+  it('validates deep equality for object and array values in enum and const', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        roleConfig: {
+          enum: [
+            { level: 'admin', tier: 1 },
+            { level: 'member', tier: 2 },
+          ],
+        },
+        coordinates: {
+          enum: [
+            [0, 0],
+            [10, 20],
+          ],
+        },
+        exactHeader: {
+          const: {
+            service: 'urumi-gateway',
+            tags: ['internal', 'authenticated'],
+          },
+        },
+      },
+    };
+
+    // Valid with distinct object/array references
+    const validResult = validateToolArguments(schema, {
+      roleConfig: { level: 'admin', tier: 1 },
+      coordinates: [10, 20],
+      exactHeader: { service: 'urumi-gateway', tags: ['internal', 'authenticated'] },
+    });
+    assert.equal(validResult.valid, true);
+
+    // Invalid enum object
+    const badRoleResult = validateToolArguments(schema, {
+      roleConfig: { level: 'admin', tier: 99 },
+    });
+    assert.equal(badRoleResult.valid, false);
+    assert.match(badRoleResult.errors[0].message, /Value must be one of/);
+
+    // Invalid enum array
+    const badCoordsResult = validateToolArguments(schema, {
+      coordinates: [10, 99],
+    });
+    assert.equal(badCoordsResult.valid, false);
+    assert.match(badCoordsResult.errors[0].message, /Value must be one of/);
+
+    // Invalid const object
+    const badConstResult = validateToolArguments(schema, {
+      exactHeader: { service: 'urumi-gateway', tags: ['internal'] },
+    });
+    assert.equal(badConstResult.valid, false);
+    assert.match(badConstResult.errors[0].message, /Value must be strictly equal to const/);
+  });
+
+  it('explicitly rejects unsupported JSON Schema keywords rather than silently accepting them', () => {
+    // Unsupported root keywords
+    assert.equal(
+      validateToolArguments({ type: 'object', oneOf: [{ properties: { a: { type: 'string' } } }] }, { a: 'foo' }).valid,
+      false
+    );
+    assert.match(
+      validateToolArguments({ type: 'object', oneOf: [] }, {}).errors[0].message,
+      /Unsupported JSON Schema keyword 'oneOf'/
+    );
+
+    assert.match(
+      validateToolArguments({ type: 'object', anyOf: [] }, {}).errors[0].message,
+      /Unsupported JSON Schema keyword 'anyOf'/
+    );
+
+    assert.match(
+      validateToolArguments({ type: 'object', allOf: [] }, {}).errors[0].message,
+      /Unsupported JSON Schema keyword 'allOf'/
+    );
+
+    assert.match(
+      validateToolArguments({ type: 'object', not: {} }, {}).errors[0].message,
+      /Unsupported JSON Schema keyword 'not'/
+    );
+
+    // Unsupported property keywords
+    const refSchema = {
+      type: 'object',
+      properties: {
+        target: { $ref: '#/definitions/Target' },
+      },
+    };
+    const refResult = validateToolArguments(refSchema, { target: {} });
+    assert.equal(refResult.valid, false);
+    assert.match(refResult.errors[0].message, /Unsupported JSON Schema keyword '\$ref'/);
+
+    const patternPropsSchema = {
+      type: 'object',
+      properties: {
+        meta: {
+          type: 'object',
+          patternProperties: { '^[a-z]+$': { type: 'string' } },
+        },
+      },
+    };
+    const patternResult = validateToolArguments(patternPropsSchema, { meta: { foo: 'bar' } });
+    assert.equal(patternResult.valid, false);
+    assert.match(patternResult.errors[0].message, /Unsupported JSON Schema keyword 'patternProperties'/);
+  });
 });

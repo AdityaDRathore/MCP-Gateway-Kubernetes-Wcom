@@ -224,5 +224,89 @@ describe('Gateway Concurrency Limiter Unit Tests', () => {
     await assert.rejects(() => limiter.acquire('crm', 5000), /Gateway is currently shutting down/);
 
     p1.release();
+    assert.equal(limiter.getActiveGlobalCount(), 0);
+  });
+
+  it('maintains exact zero global permit balance across sequentially dequeued operations', async () => {
+    const limiter = new ConcurrencyLimiter({
+      globalLimit: 10,
+      perUpstreamLimit: 1,
+      maxQueueLengthPerUpstream: 5,
+    });
+
+    const p1 = await limiter.acquire('crm', 5000);
+    assert.equal(limiter.getActiveGlobalCount(), 1);
+
+    const q1Promise = limiter.acquire('crm', 5000);
+    const q2Promise = limiter.acquire('crm', 5000);
+    assert.equal(limiter.getActiveGlobalCount(), 3);
+    assert.equal(limiter.getQueueLength('crm'), 2);
+
+    // Release p1 -> q1 gets slot
+    p1.release();
+    const p2 = await q1Promise;
+    assert.equal(limiter.getActiveGlobalCount(), 2);
+    assert.equal(limiter.getQueueLength('crm'), 1);
+
+    // Release p2 -> q2 gets slot
+    p2.release();
+    const p3 = await q2Promise;
+    assert.equal(limiter.getActiveGlobalCount(), 1);
+    assert.equal(limiter.getQueueLength('crm'), 0);
+
+    // Release p3 -> all permits free
+    p3.release();
+    assert.equal(limiter.getActiveGlobalCount(), 0);
+    assert.equal(limiter.getActiveUpstreamCount('crm'), 0);
+  });
+
+  it('cleans up abort listeners so post-resolution aborts do not cause delayed side-effects', async () => {
+    const limiter = new ConcurrencyLimiter({
+      globalLimit: 10,
+      perUpstreamLimit: 1,
+      maxQueueLengthPerUpstream: 5,
+    });
+
+    const p1 = await limiter.acquire('tasks', 5000);
+
+    const abortController = new AbortController();
+    const qPromise = limiter.acquire('tasks', 5000, abortController.signal);
+
+    // Release p1 to wake up q
+    p1.release();
+    const p2 = await qPromise;
+
+    // Now trigger abort on the signal after acquisition has completed.
+    // Because listener was cleaned up, this must not reject or corrupt state.
+    abortController.abort('Delayed abort after resolution');
+
+    assert.equal(limiter.getActiveGlobalCount(), 1);
+    p2.release();
+    assert.equal(limiter.getActiveGlobalCount(), 0);
+  });
+
+  it('restores global permit count to zero after close() cancels queued items and active item releases', async () => {
+    const limiter = new ConcurrencyLimiter({
+      globalLimit: 10,
+      perUpstreamLimit: 1,
+      maxQueueLengthPerUpstream: 5,
+    });
+
+    const p1 = await limiter.acquire('woocommerce', 5000);
+    const q1 = limiter.acquire('woocommerce', 5000);
+    const q2 = limiter.acquire('woocommerce', 5000);
+
+    assert.equal(limiter.getActiveGlobalCount(), 3);
+
+    limiter.close();
+
+    await assert.rejects(() => q1, /Gateway is shutting down/);
+    await assert.rejects(() => q2, /Gateway is shutting down/);
+
+    // Active global count should now only be p1
+    assert.equal(limiter.getActiveGlobalCount(), 1);
+
+    p1.release();
+    assert.equal(limiter.getActiveGlobalCount(), 0);
   });
 });

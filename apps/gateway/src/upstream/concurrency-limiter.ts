@@ -50,8 +50,7 @@ interface QueuedItem {
   readonly signal?: AbortSignal;
   readonly resolve: (permit: ConcurrencyPermit) => void;
   readonly reject: (err: Error) => void;
-  timer: NodeJS.Timeout | null;
-  aborted: boolean;
+  readonly cleanup: () => void;
 }
 
 export class ConcurrencyLimiter {
@@ -164,20 +163,38 @@ export class ConcurrencyLimiter {
 
     return new Promise<ConcurrencyPermit>((resolve, reject) => {
       const itemId = `queue-${slug}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      let timer: NodeJS.Timeout | null = null;
+      let onAbort: (() => void) | null = null;
+
+      const cleanup = () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (signal && onAbort) {
+          signal.removeEventListener('abort', onAbort);
+          onAbort = null;
+        }
+      };
 
       const item: QueuedItem = {
         id: itemId,
         enqueuedAt,
         deadlineMs: totalBudgetMs,
         signal,
-        resolve: (permit: ConcurrencyPermit) => resolve(permit),
-        reject: (err: Error) => reject(err),
-        timer: null,
-        aborted: false,
+        resolve: (permit: ConcurrencyPermit) => {
+          cleanup();
+          resolve(permit);
+        },
+        reject: (err: Error) => {
+          cleanup();
+          reject(err);
+        },
+        cleanup,
       };
 
       // Set queue timeout timer
-      item.timer = setTimeout(() => {
+      timer = setTimeout(() => {
         this.removeFromQueue(slug, itemId);
         item.reject(
           new QueueTimeoutError(
@@ -188,9 +205,8 @@ export class ConcurrencyLimiter {
 
       // Bind client cancellation listener
       if (signal) {
-        const onAbort = () => {
+        onAbort = () => {
           this.removeFromQueue(slug, itemId);
-          if (item.timer) clearTimeout(item.timer);
           item.reject(new Error('Request was aborted while waiting in upstream concurrency queue'));
         };
         signal.addEventListener('abort', onAbort, { once: true });
@@ -206,10 +222,7 @@ export class ConcurrencyLimiter {
     const index = queue.findIndex((i) => i.id === itemId);
     if (index !== -1) {
       const [removed] = queue.splice(index, 1);
-      if (removed.timer) {
-        clearTimeout(removed.timer);
-        removed.timer = null;
-      }
+      removed.cleanup();
     }
   }
 
@@ -228,17 +241,14 @@ export class ConcurrencyLimiter {
   }
 
   private releaseSlot(slug: string): void {
-    // 1. Release Global Slot
+    // 1. Release Global Slot held by the finishing operation
     this.activeGlobalCount = Math.max(0, this.activeGlobalCount - 1);
 
     // 2. Process next queued item for this upstream if present
     const queue = this.queues.get(slug);
     while (queue && queue.length > 0) {
       const nextItem = queue.shift()!;
-      if (nextItem.timer) {
-        clearTimeout(nextItem.timer);
-        nextItem.timer = null;
-      }
+      nextItem.cleanup();
 
       if (nextItem.signal?.aborted) {
         nextItem.reject(new Error('Request was aborted while waiting in upstream concurrency queue'));
@@ -257,8 +267,8 @@ export class ConcurrencyLimiter {
         continue;
       }
 
-      // Slot transferred to dequeued item
-      this.activeGlobalCount++;
+      // Slot transferred to dequeued item.
+      // Global permit for nextItem was already accounted when nextItem called acquire().
       nextItem.resolve(this.createPermit(slug, remainingDeadline));
       return;
     }
@@ -280,10 +290,7 @@ export class ConcurrencyLimiter {
 
     for (const [slug, queue] of this.queues) {
       for (const item of queue) {
-        if (item.timer) {
-          clearTimeout(item.timer);
-          item.timer = null;
-        }
+        item.cleanup();
         item.reject(new ConcurrencyLimitExceededError(`Gateway is shutting down. Dequeued request for upstream '${slug}'.`));
       }
       queue.length = 0;
