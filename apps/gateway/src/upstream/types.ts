@@ -47,6 +47,7 @@ export interface CatalogSnapshot {
   readonly toolsByPublicName: ReadonlyMap<string, CatalogTool>;
   readonly upstreamStatuses: ReadonlyMap<string, UpstreamStatusSummary>;
   readonly createdAt: number;
+  readonly fingerprint: string;
 }
 
 /**
