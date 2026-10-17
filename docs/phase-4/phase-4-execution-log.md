@@ -292,6 +292,7 @@
 ### 9. Gate G5: Upstream Aggregation Manager and Dynamic Tool Catalog
 - **Timestamp:** 2026-10-17T19:05:00Z
 - **Status:** **PASS (IMPLEMENTED, REMEDIATED, AND FULLY VERIFIED)**
+- **Git Commit:** `aaa447ad4df500935c7b7d99befaac5af00ab971`
 - **Technical Head Conditions Incorporated:**
   1. **Fail-Closed WHATWG URL & SSRF Validator (ADR-017):** Implemented `validateAndNormalizeUpstreamUrl()` enforcing protocol `http:`, path `/mcp`, port `3000`, approved service hostnames (`urumi-woocommerce-mcp`, `urumi-mcp-crm`, `urumi-mcp-tasks`), and strict rejection of encoded path traversal, query/hash fragments, credentials, and all direct IP literals (decimal, octal, hex, integer, IPv6, mapped IPv6). Enforced physical production lock blocking `allowLocalhostForTesting` whenever `NODE_ENV === 'production'`.
   2. **Decoupled Lifecycle vs Runtime Health State:** Strictly separated SQLite persisted administrative lifecycle state (`upstreams.status`: `provisioning`, `active`, `disabled`, `deleting`, `cleanup_required`, `failed`) from transient in-memory operational health (`connecting`, `available`, `unavailable`, `disabled`). The gateway never writes transient health to SQLite.
