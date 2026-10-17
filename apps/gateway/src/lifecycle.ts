@@ -68,18 +68,20 @@ export class LifecycleManager {
         finished = true;
         clearTimeout(forceTimer);
 
+        let cleanupFailed = false;
         for (const hook of this.cleanupHooks) {
           try {
             await hook();
           } catch (err: unknown) {
-            logger.warn('Error executing lifecycle cleanup hook', {
+            cleanupFailed = true;
+            logger.error('Error executing lifecycle cleanup hook', {
               error: err instanceof Error ? err.message : String(err),
             });
           }
         }
 
         resolve();
-        this.exitHandler(code);
+        this.exitHandler(cleanupFailed ? 1 : code);
       };
 
       // Force shutdown timer if in-flight requests do not drain within deadline

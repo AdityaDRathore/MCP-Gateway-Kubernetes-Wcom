@@ -31,9 +31,41 @@ describe('Gateway Backup and Disaster Recovery Unit Tests', () => {
       assert.equal(fs.existsSync(backupResult.backupPath), true);
       assert(backupResult.sizeBytes > 0);
 
+      // Verify backup directory permissions 0700 (drwx------)
+      const dirStat = fs.statSync(backupDir);
+      const dirMode = (dirStat.mode & 0o777).toString(8);
+      assert.equal(dirMode, '700');
+
       // Verify permissions 0600 (-rw-------)
       const stats = fs.statSync(backupResult.backupPath);
-      // In octal mode: check owner read and write
+      const modeOctal = (stats.mode & 0o777).toString(8);
+      assert.equal(modeOctal, '600');
+
+      dbManager.close();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('safely handles backup paths containing apostrophes and special characters', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gtw-backup-o'reilly-"));
+    const dbPath = path.join(tmpDir, 'gateway.db');
+    const backupDir = path.join(tmpDir, "backups_o'reilly's_dir");
+
+    try {
+      const dbManager = new DatabaseManager({ dbPath, autoMigrate: true });
+      dbManager.initialize();
+
+      const repo = new ApiKeyRepository(dbManager.getDb());
+      const keyService = new ApiKeyService(repo);
+      keyService.createUser('bob', 'admin');
+
+      // Execute backup into directory with apostrophe
+      const backupResult = backupDatabase(dbManager.getDb(), backupDir, 7);
+      assert.equal(fs.existsSync(backupResult.backupPath), true);
+
+      // Verify file permissions 0600 on snapshot
+      const stats = fs.statSync(backupResult.backupPath);
       const modeOctal = (stats.mode & 0o777).toString(8);
       assert.equal(modeOctal, '600');
 

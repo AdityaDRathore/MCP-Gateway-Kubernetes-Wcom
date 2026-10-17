@@ -39,22 +39,6 @@ export const migration001: Migration = {
     CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
     CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 
-    CREATE TABLE IF NOT EXISTS upstreams (
-      id TEXT PRIMARY KEY,
-      slug TEXT UNIQUE NOT NULL,
-      display_name TEXT NOT NULL,
-      endpoint_url TEXT NOT NULL,
-      timeout_ms INTEGER NOT NULL DEFAULT 10000 CHECK(timeout_ms BETWEEN 500 AND 30000),
-      is_enabled INTEGER NOT NULL DEFAULT 1,
-      status TEXT NOT NULL CHECK(status IN ('provisioning', 'active', 'disabled', 'deleting', 'cleanup_required', 'failed')),
-      secret_ref_name TEXT,
-      secret_ref_key TEXT,
-      cleanup_error TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_upstreams_slug ON upstreams(slug);
 
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,

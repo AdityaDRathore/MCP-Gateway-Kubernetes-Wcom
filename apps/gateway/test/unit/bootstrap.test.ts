@@ -9,22 +9,34 @@ import { ApiKeyRepository } from '../../src/db/api-key-repo.js';
 import { ApiKeyService, API_KEY_PREFIX } from '../../src/auth/api-key-service.js';
 
 describe('Gateway Administrator Bootstrap Unit Tests', () => {
-  it('provisions initial administrator on first run and returns one-time raw key', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtw-bootstrap-'));
+  it('provisions initial administrator with explicit --output-file and enforces mode 0600', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtw-bootstrap-file-'));
     const dbPath = path.join(tmpDir, 'gateway.db');
+    const keyFile = path.join(tmpDir, 'admin-secret.key');
 
     try {
       const result = await runBootstrap({
         dbPath,
         username: 'admin',
         name: 'System Administrator',
+        outputFile: keyFile,
         silent: true,
       });
 
       assert.equal(result.alreadyProvisioned, false);
       assert.equal(result.username, 'admin');
-      assert.notEqual(result.rawKey, undefined);
-      assert.equal(result.rawKey?.startsWith(API_KEY_PREFIX), true);
+      assert.equal(result.keyDeliveredTo, 'file');
+      assert.equal(result.outputFilePath, keyFile);
+
+      // Verify file exists, contains the raw key, and has mode 0600
+      assert.equal(fs.existsSync(keyFile), true);
+      const fileStat = fs.statSync(keyFile);
+      const modeOctal = (fileStat.mode & 0o777).toString(8);
+      assert.equal(modeOctal, '600');
+
+      const fileContent = fs.readFileSync(keyFile, 'utf8').trim();
+      assert.equal(fileContent.startsWith(API_KEY_PREFIX), true);
+      assert.equal(fileContent, result.rawKey);
 
       // Verify user and key in DB
       const dbManager = new DatabaseManager({ dbPath, autoMigrate: false });
@@ -36,12 +48,68 @@ describe('Gateway Administrator Bootstrap Unit Tests', () => {
       assert.equal(user?.role, 'admin');
 
       const apiKeyService = new ApiKeyService(repo);
-      const authUser = await apiKeyService.verifyKey(result.rawKey!);
+      const authUser = await apiKeyService.verifyKey(fileContent);
       assert.notEqual(authUser, null);
       assert.equal(authUser?.username, 'admin');
-      assert.equal(authUser?.role, 'admin');
 
       dbManager.close();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('safely provisions to fallback .admin-key in CI/non-interactive mode without dumping key to stdout', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtw-bootstrap-ci-'));
+    const dbPath = path.join(tmpDir, 'gateway.db');
+
+    try {
+      // Simulate CI / non-interactive environment (isCI: true, isTTY: false)
+      const result = await runBootstrap({
+        dbPath,
+        username: 'admin',
+        isCI: true,
+        isTTY: false,
+        showKey: false,
+        silent: true,
+      });
+
+      assert.equal(result.alreadyProvisioned, false);
+      assert.equal(result.keyDeliveredTo, 'file');
+
+      const expectedFallbackFile = path.join(tmpDir, '.admin-key');
+      assert.equal(result.outputFilePath, expectedFallbackFile);
+      assert.equal(fs.existsSync(expectedFallbackFile), true);
+
+      // Verify mode 0600
+      const stat = fs.statSync(expectedFallbackFile);
+      assert.equal((stat.mode & 0o777).toString(8), '600');
+
+      const savedKey = fs.readFileSync(expectedFallbackFile, 'utf8').trim();
+      assert.equal(savedKey, result.rawKey);
+
+      dbManagerClose(dbPath);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('delivers to stdout when showKey or forceStdout is explicitly enabled', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtw-bootstrap-stdout-'));
+    const dbPath = path.join(tmpDir, 'gateway.db');
+
+    try {
+      const result = await runBootstrap({
+        dbPath,
+        username: 'admin',
+        forceStdout: true,
+        silent: true,
+      });
+
+      assert.equal(result.alreadyProvisioned, false);
+      assert.equal(result.keyDeliveredTo, 'stdout');
+      assert.notEqual(result.rawKey, undefined);
+
+      dbManagerClose(dbPath);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -56,6 +124,7 @@ describe('Gateway Administrator Bootstrap Unit Tests', () => {
       const result1 = await runBootstrap({
         dbPath,
         username: 'admin',
+        forceStdout: true,
         silent: true,
       });
       assert.equal(result1.alreadyProvisioned, false);
@@ -65,6 +134,7 @@ describe('Gateway Administrator Bootstrap Unit Tests', () => {
       const result2 = await runBootstrap({
         dbPath,
         username: 'admin',
+        forceStdout: true,
         silent: true,
       });
       assert.equal(result2.alreadyProvisioned, true);
@@ -89,4 +159,10 @@ describe('Gateway Administrator Bootstrap Unit Tests', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  function dbManagerClose(dbPath: string) {
+    const mgr = new DatabaseManager({ dbPath, autoMigrate: false });
+    mgr.initialize();
+    mgr.close();
+  }
 });

@@ -42,6 +42,33 @@ describe('Gateway SQLite Database Connection Unit Tests', () => {
     }
   });
 
+  it('tightens permissions on existing loose directory to 0700 and database file to 0600', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtw-db-perm-'));
+    // Deliberately set overly permissive 0777 on directory
+    fs.chmodSync(tmpDir, 0o777);
+    const dbPath = path.join(tmpDir, 'gateway.db');
+
+    try {
+      const manager = new DatabaseManager({ dbPath, autoMigrate: true });
+      manager.initialize();
+
+      // Verify directory permissions tightened to 0700
+      const dirStat = fs.statSync(tmpDir);
+      const dirMode = (dirStat.mode & 0o777).toString(8);
+      assert.equal(dirMode, '700');
+
+      // Verify database file permissions set to 0600
+      const fileStat = fs.statSync(dbPath);
+      const fileMode = (fileStat.mode & 0o777).toString(8);
+      assert.equal(fileMode, '600');
+
+      manager.close();
+    } finally {
+      fs.chmodSync(tmpDir, 0o700);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('safely reopens an existing database without resetting or dropping data', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtw-db-reopen-'));
     const dbPath = path.join(tmpDir, 'gateway.db');
@@ -142,6 +169,31 @@ describe('Gateway SQLite Database Connection Unit Tests', () => {
       assert.equal(rolledBackRow, undefined);
 
       manager.close();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('checkpoints WAL frames on close and propagates errors when close fails', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtw-db-close-err-'));
+    const dbPath = path.join(tmpDir, 'gateway.db');
+
+    try {
+      const manager = new DatabaseManager({ dbPath, autoMigrate: true });
+      manager.initialize();
+
+      // Simulate a database handle where close throws an error
+      const realDb = manager.getDb();
+      // Close the underlying handle directly so that manager.close() attempting WAL checkpoint throws
+      realDb.close();
+
+      assert.throws(
+        () => manager.close(),
+        (err: unknown) => {
+          assert(err instanceof Error);
+          return true;
+        }
+      );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

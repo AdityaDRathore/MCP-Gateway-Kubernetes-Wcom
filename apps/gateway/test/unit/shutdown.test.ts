@@ -67,4 +67,28 @@ describe('Gateway Graceful Shutdown Coordinator Unit Tests', () => {
     // Exit code 1 verifies distinction between clean drain (0) and forced termination (1)
     assert.equal(exitCode, 1);
   });
+
+  test('exits with code 1 if a registered cleanup hook fails during shutdown', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200);
+      res.end('ok');
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const config = parseConfig({ DRAIN_TIMEOUT_MS: '2000' });
+    let exitCode: number | null = null;
+    const lifecycle = new LifecycleManager(server, config, (code) => {
+      exitCode = code;
+    });
+
+    // Register a cleanup hook that simulates a failed database close/checkpoint
+    lifecycle.registerCleanupHook(() => {
+      throw new Error('Simulated database close failure during shutdown');
+    });
+
+    await lifecycle.stop();
+
+    // Verify exit code 1 because cleanup hook failed
+    assert.equal(exitCode, 1);
+  });
 });

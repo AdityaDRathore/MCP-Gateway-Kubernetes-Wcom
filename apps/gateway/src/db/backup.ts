@@ -17,13 +17,22 @@ export interface BackupResult {
 }
 
 /**
+ * Safely escapes string literals for SQLite statement execution.
+ * In SQLite, single quotes within string literals are escaped by doubling them (' -> '').
+ */
+export function escapeSqlStringLiteral(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+/**
  * Creates an online, non-locking backup of the SQLite database using VACUUM INTO.
  * 
  * Invariants:
  * 1. Safe online copy that accounts for WAL companion files without locking readers.
- * 2. Immediately executes PRAGMA integrity_check on the generated snapshot.
- * 3. Sets strict POSIX permissions 0600 on the snapshot file.
- * 4. Automatically prunes older backups according to retention limit.
+ * 2. SQL path literal is safely escaped against injection/apostrophes.
+ * 3. Immediately executes PRAGMA integrity_check on the generated snapshot.
+ * 4. Enforces strict POSIX permissions: 0700 on backupDir, 0600 on snapshot files.
+ * 5. Automatically prunes older backups according to retention limit.
  */
 export function backupDatabase(
   db: DatabaseSync,
@@ -33,14 +42,26 @@ export function backupDatabase(
   if (!fs.existsSync(backupDir)) {
     fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
   }
+  // Enforce 0700 on existing or newly created backup directory
+  try {
+    fs.chmodSync(backupDir, 0o700);
+  } catch (err: unknown) {
+    logger.warn('Could not tighten permissions on backup directory', {
+      backupDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupFileName = `gateway-${timestamp}.db`;
   const backupPath = path.join(backupDir, backupFileName);
 
   try {
-    // 1. Snapshot database using SQLite VACUUM INTO
-    db.exec(`VACUUM INTO '${backupPath}';`);
+    // 1. Snapshot database using SQLite VACUUM INTO with safely escaped path
+    const escapedPath = escapeSqlStringLiteral(backupPath);
+    db.exec(`VACUUM INTO '${escapedPath}';`);
+
+    // Enforce 0600 permissions immediately on the created snapshot
     fs.chmodSync(backupPath, 0o600);
 
     // 2. Immediate Integrity Verification of Snapshot

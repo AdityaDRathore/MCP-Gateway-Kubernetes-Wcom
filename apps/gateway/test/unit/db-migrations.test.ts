@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { runMigrations, IncompatibleSchemaError, MigrationError } from '../../src/db/migrations.js';
-import { Migration } from '../../src/db/schema.js';
+import { Migration, MIGRATIONS } from '../../src/db/schema.js';
 
 describe('Gateway SQLite Schema Migrations Unit Tests', () => {
   it('applies migrations cleanly and records version in schema_migrations', () => {
@@ -35,6 +35,22 @@ describe('Gateway SQLite Schema Migrations Unit Tests', () => {
     db.prepare("INSERT INTO table_a (id, value) VALUES (1, 'hello');").run();
     const aRow = db.prepare('SELECT value FROM table_a WHERE id = 1;').get() as { value: string };
     assert.equal(aRow.value, 'hello');
+
+    db.close();
+  });
+
+  it('canonical Migration 001 creates users, api_keys, audit_logs and strictly excludes upstreams table', () => {
+    const db = new DatabaseSync(':memory:');
+    runMigrations(db, MIGRATIONS);
+
+    // Verify allowed tables exist
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users';").get(), undefined);
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='api_keys';").get(), undefined);
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='audit_logs';").get(), undefined);
+
+    // Verify upstreams table is strictly absent in Gate G4
+    const upstreamsTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstreams';").get();
+    assert.equal(upstreamsTable, undefined);
 
     db.close();
   });
