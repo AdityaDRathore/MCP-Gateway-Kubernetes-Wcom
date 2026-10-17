@@ -149,10 +149,11 @@
      - Member role `OPTIONS` to `/admin/v1` returns HTTP 403 Forbidden.
      - Authenticated admin `OPTIONS` returns HTTP 501 Not Implemented across all paths.
      - Verified in `apps/gateway/test/unit/admin.test.ts` (suite total expanded from 4 to 6 tests).
-  2. **Non-Silent Teardown & Disconnect Diagnostics (Blocking):**
+  2. **Non-Silent Teardown & Disconnect Diagnostics (Blocking & Final Remediation):**
      - In `apps/gateway/src/server.ts`, eliminated silent `catch(() => {})` handlers during request cleanup.
-     - Added safe, redacted warning logs (`logger.warn('Transport close error during request cleanup', ...)`) if `transport.close()` or `server.close()` rejects.
-     - Added protocol test `Client Premature Disconnect and Abort Cleanup Lifecycle` in `mcp-protocol.test.ts` verifying that aborting an in-flight request does not leak resources or compromise server health.
+     - Added safe, redacted warning logs (`logger.warn('Error during transport cleanup close', ...)`) if `transport.close()` or `server.close()` rejects.
+     - Added optional `ServerOptions` diagnostic hooks (`onMcpRequestStart`, `onMcpRequestCleanup`) and guarded against response writes after client disconnect (`res.destroyed || res.writableEnded`).
+     - In `apps/gateway/test/protocol/mcp-protocol.test.ts`, the test server explicitly signals when it receives the request and enters the `/mcp` handler before the client aborts. The test awaits this signal, triggers client abort in-flight, verifies the server observes the `close` disconnect event, and confirms subsequent `/health` and `/mcp` requests succeed with HTTP 200.
   3. **Ephemeral Port Allocation (Blocking):**
      - Eliminated hardcoded ports (7890, 7999) across test suites.
      - Updated `mcp-protocol.test.ts` and `sdk-cancellation.test.ts` to bind dynamically to `server.listen(0, '127.0.0.1')` and resolve bound ports via `server.address().port`, eliminating parallel CI/CD port contention.
@@ -186,11 +187,15 @@
        - `logger.test.ts`: 7 tests
        - `shutdown.test.ts`: 2 tests
      - **Gateway Protocol Tests (`npm --workspace=gateway run test:protocol`):** **3 passed, 0 failed across 2 suites**
-       - `mcp-protocol.test.ts`: 2 tests (Handshake + Client Premature Disconnect)
+       - `mcp-protocol.test.ts`: 2 tests (Handshake + Client Premature Disconnect with Server Entry Signal)
        - `sdk-cancellation.test.ts`: 1 test (Request-ID Correlated Abort + Sibling Isolation)
      - **Gateway Total:** **34 passed, 0 failed across 8 suites**
      - **Monorepo Build (`npm run build`):** Clean build across all 5 workspaces with 0 errors.
-     - **Monorepo Tests (`npm test`):** **162 tests passed, 0 failed** (`gateway`: 34, `woocommerce-mcp`: 81, `mcp-tasks`: 35, `mcp-crm`: 12).
+     - **Monorepo Tests (`npm test`):** **176 tests passed, 0 failed** across 4 workspaces:
+       - `apps/gateway`: 34 passed (31 unit, 3 protocol)
+       - `apps/woocommerce-mcp`: 81 passed (46 unit, 35 protocol)
+       - `apps/mcp-tasks`: 35 passed (27 unit, 8 protocol)
+       - `apps/mcp-crm`: 26 passed (20 unit, 6 protocol)
 - **Scope Invariants Preserved:**
   - Zero Gate G4 SQLite / token database code introduced.
   - Zero Gate G5 Upstream Aggregation code introduced.

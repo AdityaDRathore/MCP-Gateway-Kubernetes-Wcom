@@ -21,6 +21,8 @@ export interface ServerOptions {
   config: AppConfig;
   authenticator?: Authenticator;
   readinessCheck?: () => boolean;
+  onMcpRequestStart?: (req: Request, res: Response) => void | Promise<void>;
+  onMcpRequestCleanup?: (reason: 'finish' | 'close' | 'error') => void;
 }
 
 /**
@@ -126,9 +128,11 @@ export function createExpressApp(options: ServerOptions): express.Application {
     let isCleanedUp = false;
     let transport: StreamableHTTPServerTransport | null = null;
 
-    const cleanup = () => {
+    const cleanup = (reason: 'finish' | 'close' | 'error') => {
       if (isCleanedUp) return;
       isCleanedUp = true;
+
+      options.onMcpRequestCleanup?.(reason);
 
       if (transport) {
         transport.close().catch((err: unknown) => {
@@ -145,12 +149,22 @@ export function createExpressApp(options: ServerOptions): express.Application {
 
       logger.debug('MCP request handled and connection cleanly closed', {
         durationMs: Date.now() - startTime,
+        reason,
       });
     };
 
-    res.on('finish', cleanup);
-    res.on('close', cleanup);
-    req.on('error', cleanup);
+    res.on('finish', () => cleanup('finish'));
+    res.on('close', () => cleanup('close'));
+    req.on('error', () => cleanup('error'));
+
+    if (options.onMcpRequestStart) {
+      await options.onMcpRequestStart(req, res);
+    }
+
+    if (res.destroyed || res.writableEnded) {
+      cleanup('close');
+      return;
+    }
 
     try {
       transport = new StreamableHTTPServerTransport({
@@ -160,7 +174,7 @@ export function createExpressApp(options: ServerOptions): express.Application {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err: unknown) {
-      cleanup();
+      cleanup('error');
 
       const durationMs = Date.now() - startTime;
       logger.error('Unhandled error during MCP Streamable HTTP request', {
@@ -168,8 +182,12 @@ export function createExpressApp(options: ServerOptions): express.Application {
         durationMs,
       });
 
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Internal Server Error' });
+      if (!res.headersSent && !res.destroyed && !res.writableEnded) {
+        try {
+          res.status(500).json({ error: 'Internal Server Error' });
+        } catch {
+          // Socket was already destroyed by client abort
+        }
       }
     }
   });

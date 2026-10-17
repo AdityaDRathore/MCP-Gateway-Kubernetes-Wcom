@@ -158,34 +158,106 @@ describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
   });
 
   test('Client Premature Disconnect and Abort Cleanup Lifecycle', async () => {
-    // Bind to ephemeral port
+    let observedCleanupReason: string | null = null;
+    let signalServerEntered!: () => void;
+    const serverEnteredPromise = new Promise<void>((resolve) => {
+      signalServerEntered = resolve;
+    });
+    let signalServerCleanedUp!: (reason: string) => void;
+    const serverCleanedUpPromise = new Promise<string>((resolve) => {
+      signalServerCleanedUp = resolve;
+    });
+    let abortTargetRequestSeen = false;
+
+    // Create test app with hooks to observe server-side request entry and disconnect cleanup
+    const testApp = createExpressApp({
+      config,
+      authenticator: fakeAuth,
+      readinessCheck: () => true,
+      onMcpRequestStart: async (_req, res) => {
+        if (!abortTargetRequestSeen) {
+          abortTargetRequestSeen = true;
+          // 1. Signal that the test server has received the request and entered the /mcp handler
+          signalServerEntered();
+
+          // 2. Wait until the client disconnects and triggers 'close' on the server response
+          if (!res.destroyed && !res.writableEnded) {
+            await new Promise<void>((resolve) => {
+              res.once('close', () => resolve());
+              setTimeout(resolve, 2000); // Safety fallback timeout
+            });
+          }
+        }
+      },
+      onMcpRequestCleanup: (reason) => {
+        if (!observedCleanupReason) {
+          observedCleanupReason = reason;
+          signalServerCleanedUp(reason);
+        }
+      },
+    });
+
+    // Bind to ephemeral port (listen(0))
     const server = await new Promise<import('node:http').Server>((resolve) => {
-      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+      const s = testApp.listen(0, '127.0.0.1', () => resolve(s));
     });
     const port = (server.address() as any).port;
 
     try {
       const abortController = new AbortController();
 
-      // Initiate request and abort immediately
+      // Initiate request
       const abortPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
           Authorization: `Bearer ${validMemberToken}`,
         },
         body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 99 }),
         signal: abortController.signal,
       });
 
-      // Abort connection to trigger req/res disconnect
+      // Wait for test server to signal that it received the request and entered the handler
+      await serverEnteredPromise;
+
+      // Abort client request while in-flight on the server
       abortController.abort();
 
+      // Verify client request rejects with Abort indication
       await assert.rejects(abortPromise, /abort/i);
 
+      // Verify the server observed the disconnect and triggered cleanup
+      const cleanupReason = await serverCleanedUpPromise;
+      assert.equal(cleanupReason, 'close', 'Server cleanup must observe connection close event');
+      assert.equal(observedCleanupReason, 'close');
+
       // Verify server remains fully functional after client premature abort
-      const followUpRes = await fetch(`http://127.0.0.1:${port}/health`);
-      assert.equal(followUpRes.status, 200);
+      const followUpHealthRes = await fetch(`http://127.0.0.1:${port}/health`);
+      assert.equal(followUpHealthRes.status, 200);
+
+      // Confirm subsequent MCP request succeeds normally
+      const followUpMcpRes = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          Authorization: `Bearer ${validMemberToken}`,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'test-client', version: '1.0.0' },
+          },
+          id: 100,
+        }),
+      });
+      assert.equal(followUpMcpRes.status, 200);
+      const mcpText = await followUpMcpRes.text();
+      assert.ok(mcpText.includes('"id":100'), 'Subsequent MCP response must contain request ID 100');
     } finally {
       server.close();
     }
