@@ -290,9 +290,10 @@
   - Zero live WooCommerce store records modified (products 10/11/12 and Order #14 untouched).
 
 ### 9. Gate G5: Upstream Aggregation Manager and Dynamic Tool Catalog
-- **Timestamp:** 2026-10-17T19:05:00Z
+- **Timestamp:** 2026-10-17T19:26:00Z
 - **Status:** **PASS (IMPLEMENTED, REMEDIATED, AND FULLY VERIFIED)**
-- **Git Commit:** `aaa447ad4df500935c7b7d99befaac5af00ab971`
+- **Initial Implementation Git Commit:** `aaa447ad4df500935c7b7d99befaac5af00ab971`
+- **Remediation Git Commit:** `0213c30d88a8ffd97959de30f17775669f9796f2`
 - **Technical Head Conditions Incorporated:**
   1. **Fail-Closed WHATWG URL & SSRF Validator (ADR-017):** Implemented `validateAndNormalizeUpstreamUrl()` enforcing protocol `http:`, path `/mcp`, port `3000`, approved service hostnames (`urumi-woocommerce-mcp`, `urumi-mcp-crm`, `urumi-mcp-tasks`), and strict rejection of encoded path traversal, query/hash fragments, credentials, and all direct IP literals (decimal, octal, hex, integer, IPv6, mapped IPv6). Enforced physical production lock blocking `allowLocalhostForTesting` whenever `NODE_ENV === 'production'`.
   2. **Decoupled Lifecycle vs Runtime Health State:** Strictly separated SQLite persisted administrative lifecycle state (`upstreams.status`: `provisioning`, `active`, `disabled`, `deleting`, `cleanup_required`, `failed`) from transient in-memory operational health (`connecting`, `available`, `unavailable`, `disabled`). The gateway never writes transient health to SQLite.
@@ -309,14 +310,19 @@
   - **Atomic Catalog Service (`src/upstream/catalog-service.ts`):** Immutable, atomically snapshotted catalog with reference stability and deterministic alphanumeric ordering.
   - **Upstream Manager (`src/upstream/upstream-manager.ts`):** Coordinates upstream clients, SQLite sync, concurrent discovery with partial failure isolation, and atomic snapshot updates.
   - **Server MCP Integration (`src/server.ts`, `src/index.ts`):** Downstream stateless Streamable HTTP `/mcp` publishing aggregated 10-tool dynamic catalog and handling graceful lifecycle shutdown.
-- **Test Evidence (Gate G5 Completion):**
-  - **Gateway Unit Tests (`npm --workspace=gateway run test:unit`):** **104 passed, 0 failed across 17 suites**:
+  - **Remediation Implemented (Technical Head Review Blocker):**
+    - **Complete Tool Definition & Metadata Equality:** Implemented `areSnapshotsEqual()` performing deep structural comparison (`isDeepStrictEqual`) across full tool definitions (descriptions, nested `inputSchema` properties, `outputSchema`, `annotations`, `_meta`) and relevant upstream status fields (`healthState`, `isEnabled`, `persistedStatus`, `toolCount`, `lastError`).
+    - **Canonical SHA-256 Fingerprint:** Implemented `computeSnapshotFingerprint()` generating a deterministic SHA-256 hash across sorted canonical tool definitions and statuses, embedded on each `CatalogSnapshot.fingerprint`.
+    - **True Deep Immutability & Defensive Copying:** Implemented `ReadonlySnapshotMap` overriding mutator methods (`set`, `delete`, `clear`) to throw `TypeError`, and recursive `deepFreeze()` traversing all nested objects, arrays, and map entries. Defensively clones candidate tools via `structuredClone()` before freezing so external caller mutations cannot leak into active snapshots.
+    - **Targeted Regression Tests:** Expanded `catalog-service.test.ts` from 6 to 10 tests proving that schema changes under the same tool name create a new snapshot, description changes create a new snapshot, unchanged catalogs preserve reference stability, and consumers cannot mutate active snapshots or nested schemas.
+- **Test Evidence (Gate G5 Completion & Remediation):**
+  - **Gateway Unit Tests (`npm --workspace=gateway run test:unit`):** **108 passed, 0 failed across 17 suites**:
+    - `catalog-service.test.ts`: 10 tests (expanded from 6: empty snapshot, deterministic sorting, identical names across upstreams, reference stability, schema change detection, description change detection, outputSchema/annotations change detection, deep immutability & defensive copying, disabled tool exclusion, unreachable error retention)
     - `db-migrations.test.ts`: 6 tests (includes G4 regression test + Migration 002 upstreams verification)
     - `upstream-repo.test.ts`: 3 tests (idempotent seeding, operator preservation, constraints)
     - `ssrf-url-validator.test.ts`: 13 tests (approved hosts, prohibited protocols, credentials, query/hash, paths, traversal, IP literals, production lock)
     - `tool-validator.test.ts`: 11 tests (slug/name regex, namespacing, schema bounds, descriptions, remote $ref prohibition, catalog limits)
     - `upstream-client.test.ts`: 4 tests (state transitions, single-flight deduplication, failure teardown, disabled handling)
-    - `catalog-service.test.ts`: 6 tests (empty snapshot, atomic updates, deterministic sorting, identical names across upstreams, reference stability, unreachable tagging)
     - `admin.test.ts`: 6 tests
     - `auth.test.ts`: 6 tests
     - `config.test.ts`: 6 tests
@@ -333,11 +339,11 @@
     - `upstream-discovery.test.ts`: 3 tests (live discovery of 10 tools from 3 mock services, partial failure isolation, concurrent refresh deduplication)
     - `mcp-protocol.test.ts`: 2 tests (handshake, auth rejection, client premature disconnect)
     - `sdk-cancellation.test.ts`: 1 test (request-ID correlated abort with sibling isolation)
-  - **Gateway Total:** **111 passed, 0 failed across 21 suites**
+  - **Gateway Total:** **115 passed, 0 failed across 21 suites**
   - **Monorepo Build (`npm run build`):** Clean build across all 5 workspaces with 0 TypeScript errors.
   - **Monorepo Lint (`npm run lint`):** 0 lint errors across all workspaces.
-  - **Monorepo Tests (`npm test`):** **253 passed, 0 failed across 4 workspaces**:
-    - `apps/gateway`: 111 passed (104 unit, 7 protocol)
+  - **Monorepo Tests (`npm test`):** **257 passed, 0 failed across 4 workspaces**:
+    - `apps/gateway`: 115 passed (108 unit, 7 protocol)
     - `apps/woocommerce-mcp`: 81 passed (46 unit, 35 protocol)
     - `apps/mcp-tasks`: 35 passed (27 unit, 8 protocol)
     - `apps/mcp-crm`: 26 passed (20 unit, 6 protocol)
