@@ -12,7 +12,8 @@
     "test:protocol": "tsx --test --test-concurrency=1 test/protocol/*.test.ts",
     "test": "npm run test:unit && npm run test:protocol",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "bootstrap": "tsx src/cli/bootstrap.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

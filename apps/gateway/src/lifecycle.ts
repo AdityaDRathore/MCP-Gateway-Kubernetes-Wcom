@@ -9,6 +9,7 @@ export class LifecycleManager {
   private sockets = new Set<Socket>();
   private isShuttingDown = false;
   private exitHandler: (code: number) => void;
+  private cleanupHooks: (() => Promise<void> | void)[] = [];
 
   constructor(
     server: http.Server,
@@ -20,6 +21,10 @@ export class LifecycleManager {
     this.exitHandler = exitHandler;
 
     this.trackConnections();
+  }
+
+  registerCleanupHook(fn: () => Promise<void> | void): void {
+    this.cleanupHooks.push(fn);
   }
 
   private trackConnections(): void {
@@ -58,10 +63,21 @@ export class LifecycleManager {
 
     return new Promise((resolve) => {
       let finished = false;
-      const finish = (code: number) => {
+      const finish = async (code: number) => {
         if (finished) return;
         finished = true;
         clearTimeout(forceTimer);
+
+        for (const hook of this.cleanupHooks) {
+          try {
+            await hook();
+          } catch (err: unknown) {
+            logger.warn('Error executing lifecycle cleanup hook', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
         resolve();
         this.exitHandler(code);
       };

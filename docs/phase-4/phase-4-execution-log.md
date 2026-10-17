@@ -17,7 +17,7 @@
 | **G1** | Architecture Decisions & Contracts (ADR-011..ADR-018) | **PASS** | Remediation requested by Technical Head | 2026-10-15 |
 | **G1.1** | Focused Remediation (SSRF, RBAC, Audit, SDK Cancellation) | **APPROVED** | **Formally Approved by Technical Head** | 2026-10-15 |
 | **G3** | Gateway Protocol Skeleton & Health Endpoints | **PASS** | Completed with 100% test pass rate across unit and protocol suites | 2026-10-16 |
-| **G4** | SQLite Persistence, API Keys, Bootstrap & Two-Phase Audit | PENDING | Awaiting G3 review & G4 authorization | — |
+| **G4** | SQLite Persistence, API Keys, Bootstrap & Two-Phase Audit | **PASS** | Completed with 100% test pass rate; pending Technical Head review | 2026-10-17 |
 | **G5** | Upstream Aggregation Manager & Dynamic Tool Catalog | PENDING | Awaiting G4 completion & review | — |
 | **G6** | Gateway Router, Deadlines, Concurrency & Resilience | PENDING | Awaiting G5 completion & review | — |
 | **G7** | Dynamic Admin API & Kubernetes Secret Lifecycle | PENDING | Awaiting G6 completion & review | — |
@@ -202,5 +202,77 @@
   - Zero Gate G6 Upstream Router code introduced.
   - Zero Kubernetes or Helm modifications made.
   - Zero live store records mutated.
+
+### 8. Gate G4: SQLite Persistence, API Keys, Bootstrap, Audit, and Recovery
+- **Timestamp:** 2026-10-17T17:40:00Z
+- **Status:** **PASS (IMPLEMENTED AND FULLY VERIFIED)**
+- **Scope Implemented (`apps/gateway`):**
+  - **Database Engine & PRAGMAs (`src/db/connection.ts`):**
+    - Node.js 24 LTS core `node:sqlite` (`DatabaseSync`) in Write-Ahead Logging (WAL) mode.
+    - Path default: `/data/gateway.db` with strict `0700` directory creation and `0600` file permissions.
+    - Required PRAGMAs: `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 5000`, `synchronous = NORMAL`.
+    - Fail-closed startup: executes `PRAGMA integrity_check;` on startup; throws `DatabaseCorruptionError` on corruption without deleting or resetting database files.
+    - Transaction helper `transaction<T>(fn)` executing within `BEGIN IMMEDIATE TRANSACTION; ... COMMIT;` with automatic `ROLLBACK;` on error.
+  - **Transactional Versioned Migrations (`src/db/migrations.ts`, `src/db/schema.ts`):**
+    - Tracking table `schema_migrations` (`version`, `name`, `applied_at`).
+    - Fail-closed future version check: aborts startup with `IncompatibleSchemaError` if `db_version > code_version`.
+    - Atomic migration transactions: individual `BEGIN IMMEDIATE TRANSACTION;` per pending migration with full rollback on failure.
+    - Canonical Migration 001: establishes `users`, `api_keys`, `upstreams`, and `audit_logs` with all indexes and constraints.
+  - **API Key Lifecycle Primitives (`src/auth/api-key-service.ts`, `src/db/api-key-repo.ts`):**
+    - Cryptographic entropy: 32 bytes from `crypto.randomBytes(32)` formatted as `urumi_live_<64_hex_chars>` (75 characters).
+    - Verifier-only persistence: raw token returned once upon creation; only SHA-256 hash (`key_hash`) and 16-character prefix (`key_prefix`) saved to SQLite.
+    - Timing-safe comparison: authenticates inbound Bearer tokens using `crypto.timingSafeEqual` over raw buffer digests.
+    - Immediate revocation: `revokeKey(id)` immediately marks `revoked_at = unixepoch()`, rejecting subsequent requests on the next lookup.
+    - Expiry enforcement: keys with `expires_at <= unixepoch()` rejected.
+    - Role preservation: cleanly separates `admin` and `member` roles.
+    - Redacted logging: verified zero raw tokens, hashes, or Bearer credentials are emitted in logs.
+  - **Idempotent Administrator Bootstrap CLI (`src/cli/bootstrap.ts`):**
+    - Executable via `npm --workspace=gateway run bootstrap` or `node dist/cli/bootstrap.js`.
+    - Idempotency guard: checks if admin exists; if already provisioned, outputs notice and halts with exit code 0.
+    - Provisioning: generates initial admin user and 32-byte key in a single transaction, printing plaintext key to stdout exactly once with clear security instructions.
+  - **Durable Two-Phase Audit Persistence (`src/audit/audit-service.ts`, `src/db/audit-repo.ts`):**
+    - 6-state lifecycle model: `pending`, `success`, `failed`, `timeout`, `client_disconnected`, `unconfirmed_outcome`.
+    - Arguments fingerprint: SHA-256 hash stored in `arguments_hash`; zero customer PII or raw secrets stored.
+    - Phase 1 Fail-Closed Invariant: if writing `pending` start record fails (disk full, lock timeout), raises `AuditStartError` and aborts immediately; upstream is never called.
+    - Phase 2 Truthful Reporting Invariant: if upstream mutation succeeds but Phase 2 finalization write fails (e.g. `SQLITE_FULL`), gateway emits high-priority log `AUDIT_FINALIZATION_DEGRADED` and returns tool result without masking mutation success.
+    - Background reconciliation: `reconcileDanglingRecords(cutoff)` identifies orphaned `pending` records older than cutoff and updates to `unconfirmed_outcome` with `FINALIZATION_TIMEOUT`.
+    - Retention pruning: `pruneAuditLogs(retentionDays, batchLimit)` deletes old records in bounded batches (500 rows).
+  - **Operational Safety, Online Backup, and Recovery (`src/db/backup.ts`, `docs/phase-4/g4-recovery-runbook.md`):**
+    - Online snapshot using SQLite non-locking `VACUUM INTO '<destination_path>'`.
+    - Immediate `PRAGMA integrity_check;` on snapshot file; unlinks snapshot on verification failure.
+    - Permissions enforced: `0600` (`-rw-------`).
+    - Automated pruning retaining last 7 daily snapshots.
+    - Disaster recovery runbook documenting cold recovery, stale WAL/SHM file cleanup, and replica scaling procedures.
+    - Lifecycle integration: `LifecycleManager.registerCleanupHook` gracefully closes database connections during shutdown.
+  - **Test Evidence (Gate G4 Completion):**
+    - Gateway Unit Tests (`npm --workspace=gateway run test:unit`): **59 passed, 0 failed across 12 suites**:
+      - `db-connection.test.ts`: 5 tests
+      - `db-migrations.test.ts`: 4 tests
+      - `api-key-lifecycle.test.ts`: 7 tests
+      - `bootstrap.test.ts`: 2 tests
+      - `audit-persistence.test.ts`: 7 tests
+      - `recovery.test.ts`: 3 tests
+      - `admin.test.ts`: 6 tests
+      - `auth.test.ts`: 6 tests
+      - `config.test.ts`: 6 tests
+      - `health.test.ts`: 4 tests
+      - `logger.test.ts`: 7 tests
+      - `shutdown.test.ts`: 2 tests
+    - Gateway Protocol Tests (`npm --workspace=gateway run test:protocol`): **3 passed, 0 failed across 2 suites**
+    - Gateway Total: **62 passed, 0 failed across 14 suites**
+    - Monorepo Build (`npm run build`): **5 workspaces compiled cleanly with 0 TypeScript errors**
+    - Monorepo Lint (`npm run lint`): **0 lint errors across all workspaces**
+    - Monorepo Tests (`npm test`): **204 passed, 0 failed across 4 workspaces**:
+      - `apps/gateway`: 62 passed (59 unit, 3 protocol)
+      - `apps/woocommerce-mcp`: 81 passed (46 unit, 35 protocol)
+      - `apps/mcp-tasks`: 35 passed (27 unit, 8 protocol)
+      - `apps/mcp-crm`: 26 passed (20 unit, 6 protocol)
+- **Scope Invariants Preserved:**
+  - Zero Gate G5 Upstream Aggregation code introduced.
+  - Zero Gate G6 Upstream Router code introduced.
+  - Zero new admin HTTP routes introduced.
+  - Zero Kubernetes manifests, PVCs, or Helm charts mutated.
+  - Zero live WooCommerce store records modified (products 10/11/12 and Order #14 untouched).
+
 
 
