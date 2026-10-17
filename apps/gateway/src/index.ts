@@ -28,14 +28,33 @@ try {
   process.exit(1);
 }
 
+import { UpstreamRepository } from './db/upstream-repo.js';
+import { CatalogService } from './upstream/catalog-service.js';
+import { UpstreamManager } from './upstream/upstream-manager.js';
+
 // Instantiate SQLite-backed authentication
 const apiKeyRepo = new ApiKeyRepository(dbManager.getDb());
 const apiKeyService = new ApiKeyService(apiKeyRepo);
 const authenticator = new DatabaseAuthenticator(apiKeyService);
 
+// Instantiate Upstream Manager & Dynamic Catalog
+const upstreamRepo = new UpstreamRepository(dbManager.getDb());
+const catalogService = new CatalogService();
+const upstreamManager = new UpstreamManager(upstreamRepo, catalogService);
+
+// Initialize upstreams and discover initial catalog
+try {
+  await upstreamManager.initialize();
+} catch (err: unknown) {
+  logger.warn('Initial upstream discovery encountered errors; continuing with partial catalog', {
+    error: err instanceof Error ? err.message : String(err),
+  });
+}
+
 const app = createExpressApp({
   config,
   authenticator,
+  catalogService,
   readinessCheck: () => dbManager.isHealthy(),
 });
 
@@ -51,6 +70,10 @@ const server = app.listen(config.PORT, config.HOST, () => {
 });
 
 const lifecycle = new LifecycleManager(server, config);
+lifecycle.registerCleanupHook(async () => {
+  logger.info('Closing upstream manager clients during shutdown');
+  await upstreamManager.close();
+});
 lifecycle.registerCleanupHook(() => {
   logger.info('Closing SQLite database connection during shutdown');
   dbManager.close();

@@ -9,6 +9,14 @@ import { healthHandler, liveHandler, createReadyHandler } from './http/health.js
 import { createAdminRouter } from './http/admin.js';
 import { logger } from './logging/logger.js';
 
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+  McpError,
+  ErrorCode,
+} from '@modelcontextprotocol/sdk/types.js';
+import { CatalogService } from './upstream/catalog-service.js';
+
 // Polyfill global crypto for SDK Streamable HTTP transport streamId generation
 if (typeof (globalThis as any).crypto === 'undefined') {
   (globalThis as any).crypto = crypto;
@@ -21,24 +29,76 @@ export interface ServerOptions {
   config: AppConfig;
   authenticator?: Authenticator;
   readinessCheck?: () => boolean;
+  catalogService?: CatalogService;
   onMcpRequestStart?: (req: Request, res: Response) => void | Promise<void>;
   onMcpRequestCleanup?: (reason: 'finish' | 'close' | 'error') => void;
 }
 
 /**
  * Creates an ephemeral McpServer instance for downstream protocol handling.
- * In Gate G3, zero admin handlers and zero unverified tools are mounted.
+ * In Gate G5, publishes the combined dynamic catalog and enforces truthful G5 call boundaries.
  */
-export function createGatewayMcpServer(): McpServer {
+export function createGatewayMcpServer(catalogService?: CatalogService): McpServer {
   const server = new McpServer({
     name: 'urumi-gateway',
     version: '1.0.0',
   });
 
-  // Enable tools capability for G3 skeleton (returns empty tools array until G5 upstream catalog is integrated)
-  if (typeof (server as any).setToolRequestHandlers === 'function') {
-    (server as any).setToolRequestHandlers();
-  }
+  // Register tools capability
+  server.server.registerCapabilities({
+    tools: {
+      listChanged: true,
+    },
+  });
+
+  // Handle downstream tools/list from atomic catalog snapshot
+  server.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const snapshot = catalogService?.getSnapshot();
+    const tools = snapshot?.tools ?? [];
+
+    return {
+      tools: tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+        outputSchema: t.outputSchema,
+        annotations: t.annotations,
+        _meta: t._meta,
+      })),
+    };
+  });
+
+  // Handle downstream tools/call: enforce truthful G5 boundary
+  server.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const snapshot = catalogService?.getSnapshot();
+    const tool = snapshot?.toolsByPublicName.get(request.params.name);
+
+    if (!tool) {
+      throw new McpError(ErrorCode.InvalidParams, `Tool "${request.params.name}" not found`);
+    }
+
+    if (tool._meta && (tool._meta as any).reachable === false) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Upstream service '${tool.upstreamSlug}' is currently unreachable. The tool could not be executed.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: 'Tool execution is not implemented in Gate G5. Gateway router and tool dispatch will be activated in Gate G6.',
+        },
+      ],
+      isError: true,
+    };
+  });
 
   return server;
 }
@@ -122,7 +182,7 @@ export function createExpressApp(options: ServerOptions): express.Application {
   // Downstream Stateless Streamable HTTP MCP endpoint
   app.post('/mcp', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const startTime = Date.now();
-    const server = createGatewayMcpServer();
+    const server = createGatewayMcpServer(options.catalogService);
 
     // Idempotent multi-event transport lifecycle cleanup guard
     let isCleanedUp = false;

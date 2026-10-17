@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { runMigrations, IncompatibleSchemaError, MigrationError } from '../../src/db/migrations.js';
-import { Migration, MIGRATIONS } from '../../src/db/schema.js';
+import { Migration, MIGRATIONS, migration001 } from '../../src/db/schema.js';
 
 describe('Gateway SQLite Schema Migrations Unit Tests', () => {
   it('applies migrations cleanly and records version in schema_migrations', () => {
@@ -41,16 +41,46 @@ describe('Gateway SQLite Schema Migrations Unit Tests', () => {
 
   it('canonical Migration 001 creates users, api_keys, audit_logs and strictly excludes upstreams table', () => {
     const db = new DatabaseSync(':memory:');
-    runMigrations(db, MIGRATIONS);
+    runMigrations(db, [migration001]);
 
     // Verify allowed tables exist
     assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users';").get(), undefined);
     assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='api_keys';").get(), undefined);
     assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='audit_logs';").get(), undefined);
 
-    // Verify upstreams table is strictly absent in Gate G4
+    // Verify upstreams table is strictly absent in Migration 001
     const upstreamsTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstreams';").get();
     assert.equal(upstreamsTable, undefined);
+
+    db.close();
+  });
+
+  it('additive Migration 002 introduces upstreams registry table with constraints and index', () => {
+    const db = new DatabaseSync(':memory:');
+    runMigrations(db, MIGRATIONS);
+
+    // Verify upstreams table exists
+    const upstreamsTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstreams';").get();
+    assert.notEqual(upstreamsTable, undefined);
+
+    // Verify index exists
+    const upstreamsIndex = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_upstreams_slug';").get();
+    assert.notEqual(upstreamsIndex, undefined);
+
+    // Verify check constraints on timeout_ms and is_enabled
+    assert.throws(() => {
+      db.prepare(`
+        INSERT INTO upstreams (id, slug, display_name, endpoint_url, timeout_ms, is_enabled, status, created_at, updated_at)
+        VALUES ('1', 'test', 'Test', 'http://test/mcp', 100, 1, 'active', 1000, 1000);
+      `).run();
+    }, /CHECK constraint failed/);
+
+    assert.throws(() => {
+      db.prepare(`
+        INSERT INTO upstreams (id, slug, display_name, endpoint_url, timeout_ms, is_enabled, status, created_at, updated_at)
+        VALUES ('1', 'test', 'Test', 'http://test/mcp', 10000, 2, 'active', 1000, 1000);
+      `).run();
+    }, /CHECK constraint failed/);
 
     db.close();
   });

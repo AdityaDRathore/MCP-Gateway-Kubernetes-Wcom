@@ -33,7 +33,8 @@
 - **Baseline Git HEAD:** `210d589f2a2658d16766da12617fa03adcab5f56`
 - **Verified Cluster Inventory:** Node `k3d-urumi-server-0` (K3s `v1.37.1+k3s1`), WordPress 7.1.3, MariaDB 11.4.5, PVC `urumi-mariadb-pvc` (UID `58d7357d-a9ec-458f-b98a-78b191c7a523`), PVC `urumi-wordpress-pvc` (UID `78d0d23b-6323-44b2-a4d0-6bc1f4bbafc8`).
 - **Baseline Protected Records Captured:** Products 10, 11, 12; Order #14.
-- **Finding:** Workload `urumi-woocommerce-mcp` in `ImagePullBackOff` due to missing local k3d image import.
+- **Finding:** Workload `urumi-woocommerce-mcp` in `ImagePullBackOff` due to missing local 
+1. Implementation commit SHA(s) and branch.k3d image import.
 
 ### 2. Gate G0-R1: Workload Remediation
 - **Timestamp:** 2026-10-15T20:45:00Z
@@ -287,6 +288,64 @@
   - Zero new admin HTTP routes introduced.
   - Zero Kubernetes manifests, PVCs, or Helm charts mutated.
   - Zero live WooCommerce store records modified (products 10/11/12 and Order #14 untouched).
+
+### 9. Gate G5: Upstream Aggregation Manager and Dynamic Tool Catalog
+- **Timestamp:** 2026-10-17T19:05:00Z
+- **Status:** **PASS (IMPLEMENTED, REMEDIATED, AND FULLY VERIFIED)**
+- **Technical Head Conditions Incorporated:**
+  1. **Fail-Closed WHATWG URL & SSRF Validator (ADR-017):** Implemented `validateAndNormalizeUpstreamUrl()` enforcing protocol `http:`, path `/mcp`, port `3000`, approved service hostnames (`urumi-woocommerce-mcp`, `urumi-mcp-crm`, `urumi-mcp-tasks`), and strict rejection of encoded path traversal, query/hash fragments, credentials, and all direct IP literals (decimal, octal, hex, integer, IPv6, mapped IPv6). Enforced physical production lock blocking `allowLocalhostForTesting` whenever `NODE_ENV === 'production'`.
+  2. **Decoupled Lifecycle vs Runtime Health State:** Strictly separated SQLite persisted administrative lifecycle state (`upstreams.status`: `provisioning`, `active`, `disabled`, `deleting`, `cleanup_required`, `failed`) from transient in-memory operational health (`connecting`, `available`, `unavailable`, `disabled`). The gateway never writes transient health to SQLite.
+  3. **Unified Single-Flight Discovery & Atomic Availability:** Implemented `ManagedUpstreamClient` with single-flight `discoverTools()` sharing in-flight promises across concurrent calls. The client transitions to `available` only after protocol `tools/list` succeeds and all tool metadata passes validation. On connection or validation failure, sockets and client resources are immediately torn down and classified as sanitized, redacted errors.
+  4. **Strict Tool Metadata Validation & Catalog Bounds:** Implemented bounded schema byte limit (32 KiB UTF-8), bounded descriptions (2,048 chars), per-upstream limit (50 tools), global catalog limit (200 tools, 512 KiB total), and absolute recursive prohibition of remote `$ref` URIs. Preserves last-valid tool snapshot tagged with `_meta: { reachable: false, error: ... }` when an upstream fails.
+  5. **Truthful Gate G5 Downstream Protocol Boundary:** Mounted dynamic catalog on downstream `POST /mcp` using pinned `@modelcontextprotocol/sdk@1.32.1`. Implemented truthful G5 boundary returning official MCP `CallToolResult` with `isError: true` stating tool execution is deferred to Gate G6 (Dynamic Tool Router), and fast-failing with clear error when an upstream is unreachable.
+  6. **Reconciled Verification Evidence:** Full test suites executed cleanly across unit, protocol, and monorepo boundaries.
+- **Scope Implemented (`apps/gateway`):**
+  - **Additive Database Migration 002 (`src/db/schema.ts`):** Added `migration002` establishing `upstreams` table and `idx_upstreams_slug` index without modifying `migration001`.
+  - **SQLite Upstream Repository (`src/db/upstream-repo.ts`):** Manages `upstreams` rows, enforcing schema constraints and idempotent `seedDefaults()` preserving operator modifications.
+  - **SSRF & URL Engine (`src/upstream/url-validator.ts`):** WHATWG canonical URL parser with ADR-017 security restrictions.
+  - **Tool & Schema Validator (`src/upstream/tool-validator.ts`):** Validates tool metadata, schemas, limits, and namespacing `{server_slug}__{original_tool_name}`.
+  - **Managed Upstream Client (`src/upstream/upstream-client.ts`):** Protocol client managing lifecycle, single-flight discovery, and error classification.
+  - **Atomic Catalog Service (`src/upstream/catalog-service.ts`):** Immutable, atomically snapshotted catalog with reference stability and deterministic alphanumeric ordering.
+  - **Upstream Manager (`src/upstream/upstream-manager.ts`):** Coordinates upstream clients, SQLite sync, concurrent discovery with partial failure isolation, and atomic snapshot updates.
+  - **Server MCP Integration (`src/server.ts`, `src/index.ts`):** Downstream stateless Streamable HTTP `/mcp` publishing aggregated 10-tool dynamic catalog and handling graceful lifecycle shutdown.
+- **Test Evidence (Gate G5 Completion):**
+  - **Gateway Unit Tests (`npm --workspace=gateway run test:unit`):** **104 passed, 0 failed across 17 suites**:
+    - `db-migrations.test.ts`: 6 tests (includes G4 regression test + Migration 002 upstreams verification)
+    - `upstream-repo.test.ts`: 3 tests (idempotent seeding, operator preservation, constraints)
+    - `ssrf-url-validator.test.ts`: 13 tests (approved hosts, prohibited protocols, credentials, query/hash, paths, traversal, IP literals, production lock)
+    - `tool-validator.test.ts`: 11 tests (slug/name regex, namespacing, schema bounds, descriptions, remote $ref prohibition, catalog limits)
+    - `upstream-client.test.ts`: 4 tests (state transitions, single-flight deduplication, failure teardown, disabled handling)
+    - `catalog-service.test.ts`: 6 tests (empty snapshot, atomic updates, deterministic sorting, identical names across upstreams, reference stability, unreachable tagging)
+    - `admin.test.ts`: 6 tests
+    - `auth.test.ts`: 6 tests
+    - `config.test.ts`: 6 tests
+    - `health.test.ts`: 4 tests
+    - `logger.test.ts`: 7 tests
+    - `shutdown.test.ts`: 3 tests
+    - `db-connection.test.ts`: 7 tests
+    - `api-key-lifecycle.test.ts`: 7 tests
+    - `bootstrap.test.ts`: 4 tests
+    - `audit-persistence.test.ts`: 7 tests
+    - `recovery.test.ts`: 4 tests
+  - **Gateway Protocol Tests (`npm --workspace=gateway run test:protocol`):** **7 passed, 0 failed across 4 suites**:
+    - `gateway-catalog.test.ts`: 1 test (10-tool catalog downstream publication, schema pass-through, truthful G5 call boundaries)
+    - `upstream-discovery.test.ts`: 3 tests (live discovery of 10 tools from 3 mock services, partial failure isolation, concurrent refresh deduplication)
+    - `mcp-protocol.test.ts`: 2 tests (handshake, auth rejection, client premature disconnect)
+    - `sdk-cancellation.test.ts`: 1 test (request-ID correlated abort with sibling isolation)
+  - **Gateway Total:** **111 passed, 0 failed across 21 suites**
+  - **Monorepo Build (`npm run build`):** Clean build across all 5 workspaces with 0 TypeScript errors.
+  - **Monorepo Lint (`npm run lint`):** 0 lint errors across all workspaces.
+  - **Monorepo Tests (`npm test`):** **253 passed, 0 failed across 4 workspaces**:
+    - `apps/gateway`: 111 passed (104 unit, 7 protocol)
+    - `apps/woocommerce-mcp`: 81 passed (46 unit, 35 protocol)
+    - `apps/mcp-tasks`: 35 passed (27 unit, 8 protocol)
+    - `apps/mcp-crm`: 26 passed (20 unit, 6 protocol)
+- **Scope Invariants Preserved:**
+  - Zero Gate G6 Upstream Router code, circuit breakers, or concurrency pools introduced.
+  - Zero Gate G7 admin REST API or Kubernetes secret saga code introduced.
+  - Zero Kubernetes manifests, PVCs, or Helm charts mutated.
+  - Zero live WooCommerce store records modified (products 10/11/12 and Order #14 untouched).
+
 
 
 

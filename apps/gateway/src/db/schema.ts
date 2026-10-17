@@ -58,6 +58,30 @@ export const migration001: Migration = {
   `,
 };
 
+export const migration002: Migration = {
+  version: 2,
+  name: '002_upstreams_registry',
+  sql: `
+    CREATE TABLE IF NOT EXISTS upstreams (
+      id TEXT PRIMARY KEY,
+      slug TEXT UNIQUE NOT NULL,
+      display_name TEXT NOT NULL,
+      endpoint_url TEXT NOT NULL,
+      timeout_ms INTEGER NOT NULL DEFAULT 10000 CHECK(timeout_ms BETWEEN 500 AND 30000),
+      is_enabled INTEGER NOT NULL DEFAULT 1 CHECK(is_enabled IN (0, 1)),
+      status TEXT NOT NULL CHECK(status IN ('provisioning', 'active', 'disabled', 'deleting', 'cleanup_required', 'failed')),
+      secret_ref_name TEXT,
+      secret_ref_key TEXT,
+      cleanup_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_upstreams_slug ON upstreams(slug);
+  `,
+};
+
 export const MIGRATIONS: Migration[] = [
   migration001,
+  migration002,
 ];
