@@ -74,6 +74,49 @@ function checkUnsupportedKeywords(
 }
 
 /**
+ * Recursively inspects the entire schema tree upfront (properties, items, additionalProperties)
+ * to reject unsupported keywords anywhere in the schema definition.
+ */
+function validateSchemaStructure(
+  schema: Record<string, unknown>,
+  path: string,
+  errors: SchemaValidationError[],
+  depth = 0
+): void {
+  if (depth > MAX_DEPTH) {
+    errors.push({ path, message: 'Schema nesting depth exceeds maximum limit of 16' });
+    return;
+  }
+
+  checkUnsupportedKeywords(schema, path, errors);
+
+  if (schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)) {
+    for (const [key, propSchema] of Object.entries(schema.properties as Record<string, unknown>)) {
+      if (propSchema && typeof propSchema === 'object' && !Array.isArray(propSchema)) {
+        const propPath = path === '#' ? `#/${key}` : `${path}/${key}`;
+        validateSchemaStructure(propSchema as Record<string, unknown>, propPath, errors, depth + 1);
+      }
+    }
+  }
+
+  if (schema.items && typeof schema.items === 'object') {
+    if (Array.isArray(schema.items)) {
+      schema.items.forEach((itemSchema, idx) => {
+        if (itemSchema && typeof itemSchema === 'object' && !Array.isArray(itemSchema)) {
+          validateSchemaStructure(itemSchema as Record<string, unknown>, `${path}[${idx}]`, errors, depth + 1);
+        }
+      });
+    } else {
+      validateSchemaStructure(schema.items as Record<string, unknown>, `${path}[]`, errors, depth + 1);
+    }
+  }
+
+  if (schema.additionalProperties && typeof schema.additionalProperties === 'object' && !Array.isArray(schema.additionalProperties)) {
+    validateSchemaStructure(schema.additionalProperties as Record<string, unknown>, `${path}/*`, errors, depth + 1);
+  }
+}
+
+/**
  * Validates tool call arguments against a tool's JSON Schema.
  */
 export function validateToolArguments(
@@ -90,8 +133,8 @@ export function validateToolArguments(
     };
   }
 
-  // Check for unsupported keywords on root schema
-  checkUnsupportedKeywords(schema, '#', errors);
+  // Statically validate the entire schema structure upfront for unsupported keywords
+  validateSchemaStructure(schema, '#', errors, 0);
   if (errors.length > 0) {
     return { valid: false, errors };
   }
@@ -212,11 +255,37 @@ function validateValue(
   // Check for unsupported keywords on this property/value schema
   checkUnsupportedKeywords(schema, path, errors);
 
-  // Check nullability
+  // Check nullability, enum, and const for null values
   if (value === null) {
     if (!isNullable(schema)) {
       errors.push({ path, message: 'Value cannot be null' });
+      return;
     }
+
+    // Enum validation for null values
+    if (Array.isArray(schema.enum)) {
+      const matched = schema.enum.some((allowed) => isDeepStrictEqual(allowed, value));
+      if (!matched) {
+        errors.push({
+          path,
+          message: `Value must be one of [${schema.enum.map((v) => JSON.stringify(v)).join(', ')}], received ${JSON.stringify(value)}`,
+        });
+        return;
+      }
+    }
+
+    // Const validation for null values
+    if ('const' in schema) {
+      if (!isDeepStrictEqual(schema.const, value)) {
+        errors.push({
+          path,
+          message: `Value must be strictly equal to const ${JSON.stringify(schema.const)}, received ${JSON.stringify(value)}`,
+        });
+        return;
+      }
+    }
+
+    // null has satisfied nullability, enum, and const; numeric/string/array constraints do not apply
     return;
   }
 

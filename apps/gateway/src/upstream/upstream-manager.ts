@@ -92,11 +92,8 @@ export class UpstreamManager {
     const seedResult = this.upstreamRepo.seedDefaults();
     logger.debug('Seeded default upstreams', seedResult);
 
-    // 2. Load all configured upstreams from SQLite
-    const rows = this.upstreamRepo.getAllUpstreams();
-    for (const row of rows) {
-      this.registerClientFromRow(row);
-    }
+    // 2. Synchronize managed clients from SQLite rows
+    this.syncClientsWithRepository();
 
     // 3. Compile initial catalog snapshot
     await this.refreshAll();

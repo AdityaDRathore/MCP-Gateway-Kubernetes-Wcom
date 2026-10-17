@@ -376,8 +376,8 @@
   - **Managed Upstream Client Execution (`src/upstream/upstream-client.ts`):** Added `callTool(toolName, args, options)` with scoped AbortSignal propagation and timeout retrieval.
   - **Server & Downstream MCP Wiring (`src/server.ts`, `src/index.ts`):** Connected `ToolRouter` to downstream `POST /mcp` tool execution handler, instrumented `res.on('close')` client disconnect handling, and registered graceful shutdown hooks draining concurrency pools.
 - **Test Evidence (Gate G6 Completion & Remediation):**
-  - **Gateway Unit Tests (`npm --workspace=gateway run test:unit`):** **151 passed, 0 failed across 21 suites**:
-    - `json-schema-validator.test.ts`: **14 tests** (expanded from 11: primitives, integers vs floats, bounds, regex, enums, consts, nested objects, array items, additionalProperties rejection, depth limit, required properties with permitted vs non-permitted nulls, deep equality for structured objects/arrays in enum and const, explicit rejection of unsupported keywords)
+  - **Gateway Unit Tests (`npm --workspace=gateway run test:unit`):** **152 passed, 0 failed across 21 suites**:
+    - `json-schema-validator.test.ts`: **15 tests** (expanded from 11: primitives, integers vs floats, bounds, regex, enums, consts, nested objects, array items, additionalProperties rejection, depth limit, required properties with permitted vs non-permitted nulls, deep equality for structured objects/arrays in enum and const, explicit rejection of unsupported keywords, enum and const null evaluation, and recursive upfront rejection of unsupported keywords on omitted optional properties, empty arrays, and primitive property schemas)
     - `circuit-breaker.test.ts`: 8 tests (initial closed state, trip to open at threshold 3, rejection when open, reset timeout transition to half-open, probe success recovery, probe failure re-trip, client abort isolation, per-upstream failure isolation)
     - `concurrency-limiter.test.ts`: **10 tests** (expanded from 7: global limit 20, per-upstream limit 4, queue wait deadline deduction, client cancellation dequeuing, upstream acquisition rollback, bounded queue rejection, graceful shutdown drain, exact zero global permit balance across sequentially dequeued operations, post-resolution abort listener cleanup, shutdown drain permit recovery)
     - `tool-router.test.ts`: 11 tests (unknown tool rejection, catalog unreachable fast-fail, schema validation before dispatch, mutation classification, Phase 1 audit fail-closed, confirmed upstream execution with Phase 2 success, tool-level error handling without breaker trip, mutating timeout unconfirmed_outcome without retry, read-only timeout classification, Phase 2 audit degradation dual signaling, MAX_RESULT_SIZE_BYTES response cap)
@@ -404,11 +404,11 @@
     - `upstream-discovery.test.ts`: 3 tests (live upstream tool discovery, failure isolation, deduplication)
     - `mcp-protocol.test.ts`: 2 tests (protocol handshake, auth rejection, client premature disconnect)
     - `sdk-cancellation.test.ts`: 1 test (request-ID correlated abort with sibling isolation)
-  - **Gateway Total:** **159 passed, 0 failed across 26 suites**
+  - **Gateway Total:** **160 passed, 0 failed across 26 suites**
   - **Monorepo Build (`npm run build`):** Clean build across all 5 workspaces with 0 TypeScript errors.
   - **Monorepo Lint (`npm run lint`):** 0 lint errors across all workspaces.
-  - **Monorepo Tests (`npm test`):** **301 passed, 0 failed across 4 workspaces**:
-    - `apps/gateway`: 159 passed (151 unit, 8 protocol)
+  - **Monorepo Tests (`npm test`):** **302 passed, 0 failed across 4 workspaces**:
+    - `apps/gateway`: 160 passed (152 unit, 8 protocol)
     - `apps/woocommerce-mcp`: 81 passed (46 unit, 35 protocol)
     - `apps/mcp-tasks`: 35 passed (27 unit, 8 protocol)
     - `apps/mcp-crm`: 26 passed (20 unit, 6 protocol)

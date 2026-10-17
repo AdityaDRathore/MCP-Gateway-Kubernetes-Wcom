@@ -392,5 +392,96 @@ describe('Gateway JSON Schema Argument Validator Unit Tests', () => {
     const patternResult = validateToolArguments(patternPropsSchema, { meta: { foo: 'bar' } });
     assert.equal(patternResult.valid, false);
     assert.match(patternResult.errors[0].message, /Unsupported JSON Schema keyword 'patternProperties'/);
+
+    // Unsupported keywords on omitted optional property schemas are rejected upfront
+    const omittedPropSchema = {
+      type: 'object',
+      properties: {
+        present: { type: 'string' },
+        omittedOptional: {
+          type: 'string',
+          oneOf: [{ minLength: 3 }],
+        },
+      },
+    };
+    const omittedResult = validateToolArguments(omittedPropSchema, { present: 'hello' });
+    assert.equal(omittedResult.valid, false);
+    assert.ok(omittedResult.errors.some((e) => e.path === '#/omittedOptional/oneOf' && e.message.includes('oneOf')));
+
+    // Unsupported keywords on array items schemas are rejected upfront even with empty array
+    const emptyArrayItemsSchema = {
+      type: 'object',
+      properties: {
+        tags: {
+          type: 'array',
+          items: {
+            type: 'string',
+            anyOf: [{ pattern: '^[a-z]+$' }],
+          },
+        },
+      },
+    };
+    const emptyArrayResult = validateToolArguments(emptyArrayItemsSchema, { tags: [] });
+    assert.equal(emptyArrayResult.valid, false);
+    assert.ok(emptyArrayResult.errors.some((e) => e.path === '#/tags[]/anyOf' && e.message.includes('anyOf')));
+
+    // Unsupported keywords on primitive-valued property schemas are rejected upfront
+    const primitiveKeywordSchema = {
+      type: 'object',
+      properties: {
+        description: {
+          type: 'string',
+          allOf: [{ minLength: 1 }],
+        },
+      },
+    };
+    const primitiveResult = validateToolArguments(primitiveKeywordSchema, { description: 'test' });
+    assert.equal(primitiveResult.valid, false);
+    assert.ok(primitiveResult.errors.some((e) => e.path === '#/description/allOf' && e.message.includes('allOf')));
+  });
+
+  it('evaluates enum and const correctly for null values', () => {
+    // 1. enum containing null permits null
+    const enumWithNullSchema = {
+      type: 'object',
+      properties: {
+        state: { enum: ['active', 'inactive', null] },
+      },
+    };
+    const validEnumNull = validateToolArguments(enumWithNullSchema, { state: null });
+    assert.equal(validEnumNull.valid, true);
+
+    // 2. enum NOT containing null rejects null even if nullable: true is specified
+    const enumWithoutNullNullableSchema = {
+      type: 'object',
+      properties: {
+        state: { enum: ['active', 'inactive'], nullable: true },
+      },
+    };
+    const invalidEnumNull = validateToolArguments(enumWithoutNullNullableSchema, { state: null });
+    assert.equal(invalidEnumNull.valid, false);
+    assert.match(invalidEnumNull.errors[0].message, /Value must be one of/);
+
+    // 3. const: null permits null
+    const constNullSchema = {
+      type: 'object',
+      properties: {
+        marker: { const: null },
+      },
+    };
+    const validConstNull = validateToolArguments(constNullSchema, { marker: null });
+    assert.equal(validConstNull.valid, true);
+
+    // 4. const NOT null rejects null even if nullable: true is specified
+    const constNotNullNullableSchema = {
+      type: 'object',
+      properties: {
+        secret: { const: 'REQUIRED_SECRET', nullable: true },
+      },
+    };
+    const invalidConstNull = validateToolArguments(constNotNullNullableSchema, { secret: null });
+    assert.equal(invalidConstNull.valid, false);
+    assert.match(invalidConstNull.errors[0].message, /Value must be strictly equal to const "REQUIRED_SECRET"/);
   });
 });
+
