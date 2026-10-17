@@ -103,19 +103,25 @@ export class UpstreamManager {
   }
 
   /**
-   * Discovers tools from all enabled upstreams concurrently with partial failure isolation.
-   * Updates the atomic catalog snapshot.
+   * Synchronizes managed client instances with current upstream rows in the repository.
    */
-  async refreshAll(): Promise<CatalogSnapshot> {
+  syncClientsWithRepository(): void {
     const rows = this.upstreamRepo.getAllUpstreams();
-    const rowMap = new Map(rows.map((r) => [r.slug, r]));
-
-    // Synchronize clients map with current DB rows
     for (const row of rows) {
       if (!this.clients.has(row.slug)) {
         this.registerClientFromRow(row);
       }
     }
+  }
+
+  /**
+   * Discovers tools from all enabled upstreams concurrently with partial failure isolation.
+   * Updates the atomic catalog snapshot.
+   */
+  async refreshAll(): Promise<CatalogSnapshot> {
+    this.syncClientsWithRepository();
+    const rows = this.upstreamRepo.getAllUpstreams();
+    const rowMap = new Map(rows.map((r) => [r.slug, r]));
 
     const clientEntries = Array.from(this.clients.entries());
     const discoveryPromises = clientEntries.map(async ([slug, client]) => {

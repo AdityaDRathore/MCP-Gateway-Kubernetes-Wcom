@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
-import { AuditRepository, AuditStatus, AuditRecord } from '../db/audit-repo.js';
+import { AuditRepository, type AuditStatus, type AuditRecord } from '../db/audit-repo.js';
 import { logger } from '../logging/logger.js';
+
+export type { AuditStatus, AuditRecord } from '../db/audit-repo.js';
 
 export class AuditStartError extends Error {
   constructor(message: string) {

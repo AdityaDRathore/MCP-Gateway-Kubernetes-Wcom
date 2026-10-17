@@ -1,0 +1,280 @@
+/**
+ * Real JSON Schema Validator for Gate G6.
+ * Validates tool call arguments against discovered JSON Schema (Draft-07 / 2020-12 compatible subset).
+ * 
+ * Non-Negotiable Invariants:
+ * - Pure validation: never mutates, coerces, or injects arguments.
+ * - Deep recursive validation of nested objects, arrays, enums, numeric bounds, string patterns/lengths.
+ * - Strict additionalProperties: false enforcement.
+ * - Zero external dependencies.
+ */
+
+export interface SchemaValidationError {
+  readonly path: string;
+  readonly message: string;
+}
+
+export interface ValidationResult {
+  readonly valid: boolean;
+  readonly errors: readonly SchemaValidationError[];
+}
+
+/**
+ * Validates tool call arguments against a tool's JSON Schema.
+ */
+export function validateToolArguments(
+  schema: Record<string, unknown> | undefined,
+  args: unknown
+): ValidationResult {
+  const errors: SchemaValidationError[] = [];
+
+  // Schema must be an object schema
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return {
+      valid: false,
+      errors: [{ path: '#', message: 'Tool inputSchema must be a valid JSON Schema object' }],
+    };
+  }
+
+  // Root schema must declare type: 'object'
+  if (schema.type !== 'object') {
+    return {
+      valid: false,
+      errors: [{ path: '#', message: `Root schema type must be 'object', got '${String(schema.type)}'` }],
+    };
+  }
+
+  // Arguments must be an object (or undefined if no required properties)
+  const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
+
+  if (args === undefined || args === null) {
+    if (required.length > 0) {
+      return {
+        valid: false,
+        errors: [{ path: '#', message: `Missing required arguments: ${required.join(', ')}` }],
+      };
+    }
+    // No required arguments and args is empty/undefined -> valid empty object
+    return { valid: true, errors: [] };
+  }
+
+  if (typeof args !== 'object' || Array.isArray(args)) {
+    return {
+      valid: false,
+      errors: [{ path: '#', message: `Arguments must be an object, received ${Array.isArray(args) ? 'array' : typeof args}` }],
+    };
+  }
+
+  validateObject(schema, args as Record<string, unknown>, '#', errors, 0);
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+const MAX_DEPTH = 16;
+
+function validateObject(
+  schema: Record<string, unknown>,
+  obj: Record<string, unknown>,
+  currentPath: string,
+  errors: SchemaValidationError[],
+  depth: number
+): void {
+  if (depth > MAX_DEPTH) {
+    errors.push({ path: currentPath, message: 'Argument nesting depth exceeds maximum limit of 16' });
+    return;
+  }
+
+  // 1. Check required properties
+  if (Array.isArray(schema.required)) {
+    for (const reqKey of schema.required) {
+      if (typeof reqKey === 'string' && (obj[reqKey] === undefined || obj[reqKey] === null)) {
+        // If property allows null via nullable or type: ['...', 'null'], null is acceptable
+        const propSchema = (schema.properties as Record<string, unknown> | undefined)?.[reqKey];
+        if (obj[reqKey] === null && isNullable(propSchema)) {
+          continue;
+        }
+        errors.push({
+          path: currentPath === '#' ? `#/${reqKey}` : `${currentPath}/${reqKey}`,
+          message: `Required property '${reqKey}' is missing or undefined`,
+        });
+      }
+    }
+  }
+
+  const properties = (schema.properties as Record<string, unknown> | undefined) ?? {};
+  const additionalProperties = schema.additionalProperties;
+
+  // 2. Check each provided property in obj
+  for (const [key, value] of Object.entries(obj)) {
+    const propPath = currentPath === '#' ? `#/${key}` : `${currentPath}/${key}`;
+    const propSchema = properties[key] as Record<string, unknown> | undefined;
+
+    if (propSchema) {
+      validateValue(propSchema, value, propPath, errors, depth + 1);
+    } else {
+      // Property is not explicitly declared in properties
+      if (additionalProperties === false) {
+        errors.push({
+          path: propPath,
+          message: `Unexpected property '${key}' not allowed by schema (additionalProperties is false)`,
+        });
+      } else if (typeof additionalProperties === 'object' && additionalProperties !== null && !Array.isArray(additionalProperties)) {
+        validateValue(additionalProperties as Record<string, unknown>, value, propPath, errors, depth + 1);
+      }
+    }
+  }
+}
+
+function isNullable(schema: unknown): boolean {
+  if (!schema || typeof schema !== 'object') return false;
+  const s = schema as Record<string, unknown>;
+  if (s.nullable === true) return true;
+  if (Array.isArray(s.type) && s.type.includes('null')) return true;
+  if (s.type === 'null') return true;
+  return false;
+}
+
+function validateValue(
+  schema: Record<string, unknown>,
+  value: unknown,
+  path: string,
+  errors: SchemaValidationError[],
+  depth: number
+): void {
+  // Check nullability
+  if (value === null) {
+    if (!isNullable(schema)) {
+      errors.push({ path, message: 'Value cannot be null' });
+    }
+    return;
+  }
+
+  // Undefined values are allowed if property is optional and not explicitly provided
+  if (value === undefined) {
+    return;
+  }
+
+  // Enum validation
+  if (Array.isArray(schema.enum)) {
+    const matched = schema.enum.some((allowed) => allowed === value);
+    if (!matched) {
+      errors.push({
+        path,
+        message: `Value must be one of [${schema.enum.map((v) => JSON.stringify(v)).join(', ')}], received ${JSON.stringify(value)}`,
+      });
+      return;
+    }
+  }
+
+  // Const validation
+  if ('const' in schema) {
+    if (schema.const !== value) {
+      errors.push({
+        path,
+        message: `Value must be strictly equal to const ${JSON.stringify(schema.const)}, received ${JSON.stringify(value)}`,
+      });
+      return;
+    }
+  }
+
+  // Type validation
+  if (schema.type) {
+    const allowedTypes = Array.isArray(schema.type) ? (schema.type as string[]) : [schema.type as string];
+    const actualType = getJsonType(value);
+
+    const typeMatch = allowedTypes.some((t) => {
+      if (t === 'integer') return actualType === 'number' && Number.isInteger(value);
+      if (t === 'number') return actualType === 'number';
+      return t === actualType;
+    });
+
+    if (!typeMatch) {
+      if (allowedTypes.includes('integer') && actualType === 'number' && !Number.isInteger(value)) {
+        errors.push({
+          path,
+          message: `Expected integer, received float ${value}`,
+        });
+      } else {
+        errors.push({
+          path,
+          message: `Expected type ${allowedTypes.join(' | ')}, received ${actualType}`,
+        });
+      }
+      return;
+    }
+  }
+
+  // Numeric constraints
+  if (typeof value === 'number') {
+    if (schema.type === 'integer' && !Number.isInteger(value)) {
+      errors.push({ path, message: `Expected integer, received float ${value}` });
+    }
+    if (typeof schema.minimum === 'number' && value < schema.minimum) {
+      errors.push({ path, message: `Value ${value} is less than minimum ${schema.minimum}` });
+    }
+    if (typeof schema.maximum === 'number' && value > schema.maximum) {
+      errors.push({ path, message: `Value ${value} exceeds maximum ${schema.maximum}` });
+    }
+    if (typeof schema.exclusiveMinimum === 'number' && value <= schema.exclusiveMinimum) {
+      errors.push({ path, message: `Value ${value} must be strictly greater than ${schema.exclusiveMinimum}` });
+    }
+    if (typeof schema.exclusiveMaximum === 'number' && value >= schema.exclusiveMaximum) {
+      errors.push({ path, message: `Value ${value} must be strictly less than ${schema.exclusiveMaximum}` });
+    }
+  }
+
+  // String constraints
+  if (typeof value === 'string') {
+    if (typeof schema.minLength === 'number' && value.length < schema.minLength) {
+      errors.push({ path, message: `String length (${value.length}) is shorter than minLength ${schema.minLength}` });
+    }
+    if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) {
+      errors.push({ path, message: `String length (${value.length}) exceeds maxLength ${schema.maxLength}` });
+    }
+    if (typeof schema.pattern === 'string') {
+      try {
+        const regex = new RegExp(schema.pattern);
+        if (!regex.test(value)) {
+          errors.push({ path, message: `String does not match required pattern '${schema.pattern}'` });
+        }
+      } catch {
+        errors.push({ path, message: `Invalid regex pattern in schema: '${schema.pattern}'` });
+      }
+    }
+  }
+
+  // Array constraints
+  if (Array.isArray(value)) {
+    if (typeof schema.minItems === 'number' && value.length < schema.minItems) {
+      errors.push({ path, message: `Array item count (${value.length}) is less than minItems ${schema.minItems}` });
+    }
+    if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) {
+      errors.push({ path, message: `Array item count (${value.length}) exceeds maxItems ${schema.maxItems}` });
+    }
+    if (schema.items && typeof schema.items === 'object' && !Array.isArray(schema.items)) {
+      const itemSchema = schema.items as Record<string, unknown>;
+      for (let i = 0; i < value.length; i++) {
+        validateValue(itemSchema, value[i], `${path}[${i}]`, errors, depth + 1);
+      }
+    }
+  }
+
+  // Nested object validation
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    validateObject(schema, value as Record<string, unknown>, path, errors, depth + 1);
+  }
+}
+
+function getJsonType(val: unknown): string {
+  if (val === null) return 'null';
+  if (Array.isArray(val)) return 'array';
+  const t = typeof val;
+  if (t === 'number') {
+    if (Number.isNaN(val) || !Number.isFinite(val)) return 'null';
+    return 'number';
+  }
+  return t;
+}

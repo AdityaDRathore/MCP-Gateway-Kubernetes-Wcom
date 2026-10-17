@@ -1,6 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
+  CallToolResult,
+  CallToolResultSchema,
+} from '@modelcontextprotocol/sdk/types.js';
+import {
   UpstreamHealthState,
   DiscoveredToolsResult,
   UpstreamConnectionError,
@@ -61,6 +65,69 @@ export class ManagedUpstreamClient {
     return this.client;
   }
 
+  getTimeoutMs(): number {
+    return Math.max(500, Math.min(30000, this.config.timeoutMs || 10000));
+  }
+
+  /**
+   * Ensures transport connection is established to the upstream service.
+   */
+  async ensureConnected(signal?: AbortSignal): Promise<Client> {
+    if (this.client && this.transport) {
+      return this.client;
+    }
+
+    const validated = validateAndNormalizeUpstreamUrl(this.config.endpointUrl, {
+      allowLocalhostForTesting: this.config.allowLocalhostForTesting,
+    });
+
+    await this.close();
+    this.transport = new StreamableHTTPClientTransport(new URL(validated.normalizedFqdnUrl));
+    this.client = new Client(
+      { name: 'urumi-gateway-upstream-client', version: '1.0.0' },
+      { capabilities: {} }
+    );
+
+    await this.client.connect(this.transport, { signal });
+    return this.client;
+  }
+
+  /**
+   * Executes a tool invocation against the managed upstream MCP client.
+   * Ensures transport connectivity, passes request signal for granular cancellation,
+   * classifies errors, and returns the truthful CallToolResult.
+   */
+  async callTool(
+    originalName: string,
+    args?: Record<string, unknown>,
+    options?: { signal?: AbortSignal }
+  ): Promise<CallToolResult> {
+    if (!this.config.isEnabled) {
+      throw new UpstreamDisabledError(`Upstream service '${this.config.slug}' is disabled`);
+    }
+
+    try {
+      const client = await this.ensureConnected(options?.signal);
+
+      const result = await client.request(
+        {
+          method: 'tools/call',
+          params: {
+            name: originalName,
+            arguments: args,
+          },
+        },
+        CallToolResultSchema,
+        { signal: options?.signal }
+      );
+
+      return result;
+    } catch (err: unknown) {
+      const classified = this.classifyError(err);
+      throw classified;
+    }
+  }
+
   /**
    * Executes unified connection establishment and tool discovery.
    * Single-flight: concurrent calls return the identical in-flight promise.
@@ -83,7 +150,7 @@ export class ManagedUpstreamClient {
     this.refreshPromise = (async (): Promise<DiscoveredToolsResult> => {
       this.healthState = 'connecting';
       const abortController = new AbortController();
-      const timeoutMs = Math.max(500, Math.min(30000, this.config.timeoutMs || 10000));
+      const timeoutMs = this.getTimeoutMs();
       const timeoutTimer = setTimeout(() => {
         abortController.abort(
           new UpstreamTimeoutError(
@@ -93,25 +160,11 @@ export class ManagedUpstreamClient {
       }, timeoutMs);
 
       try {
-        // Step 1: Validate URL and SSRF bounds
-        const validated = validateAndNormalizeUpstreamUrl(this.config.endpointUrl, {
-          allowLocalhostForTesting: this.config.allowLocalhostForTesting,
-        });
+        // Step 1: Establish connection if not already connected
+        const client = await this.ensureConnected(abortController.signal);
 
-        // Step 2: Establish connection if not already connected
-        if (!this.client || !this.transport) {
-          await this.close();
-          this.transport = new StreamableHTTPClientTransport(new URL(validated.normalizedFqdnUrl));
-          this.client = new Client(
-            { name: 'urumi-gateway-upstream-client', version: '1.0.0' },
-            { capabilities: {} }
-          );
-
-          await this.client.connect(this.transport, { signal: abortController.signal });
-        }
-
-        // Step 3: Discover tools via protocol-level tools/list
-        const listResult = await this.client.listTools(undefined, {
+        // Step 2: Discover tools via protocol-level tools/list
+        const listResult = await client.listTools(undefined, {
           signal: abortController.signal,
         });
 

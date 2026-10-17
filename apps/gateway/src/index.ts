@@ -31,6 +31,9 @@ try {
 import { UpstreamRepository } from './db/upstream-repo.js';
 import { CatalogService } from './upstream/catalog-service.js';
 import { UpstreamManager } from './upstream/upstream-manager.js';
+import { AuditRepository } from './db/audit-repo.js';
+import { AuditService } from './audit/audit-service.js';
+import { ToolRouter } from './upstream/tool-router.js';
 
 // Instantiate SQLite-backed authentication
 const apiKeyRepo = new ApiKeyRepository(dbManager.getDb());
@@ -41,6 +44,11 @@ const authenticator = new DatabaseAuthenticator(apiKeyService);
 const upstreamRepo = new UpstreamRepository(dbManager.getDb());
 const catalogService = new CatalogService();
 const upstreamManager = new UpstreamManager(upstreamRepo, catalogService);
+
+// Instantiate Audit Service & Dynamic Tool Router
+const auditRepo = new AuditRepository(dbManager.getDb());
+const auditService = new AuditService(auditRepo);
+const toolRouter = new ToolRouter(catalogService, upstreamManager, auditService, config);
 
 // Initialize upstreams and discover initial catalog
 try {
@@ -55,6 +63,7 @@ const app = createExpressApp({
   config,
   authenticator,
   catalogService,
+  toolRouter,
   readinessCheck: () => dbManager.isHealthy(),
 });
 
@@ -70,6 +79,10 @@ const server = app.listen(config.PORT, config.HOST, () => {
 });
 
 const lifecycle = new LifecycleManager(server, config);
+lifecycle.registerCleanupHook(() => {
+  logger.info('Closing tool router during shutdown');
+  toolRouter.close();
+});
 lifecycle.registerCleanupHook(async () => {
   logger.info('Closing upstream manager clients during shutdown');
   await upstreamManager.close();

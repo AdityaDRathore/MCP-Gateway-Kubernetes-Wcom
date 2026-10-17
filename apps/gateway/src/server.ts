@@ -16,6 +16,8 @@ import {
   ErrorCode,
 } from '@modelcontextprotocol/sdk/types.js';
 import { CatalogService } from './upstream/catalog-service.js';
+import { ToolRouter } from './upstream/tool-router.js';
+import { AuthenticatedUser } from './auth/authenticator.js';
 
 // Polyfill global crypto for SDK Streamable HTTP transport streamId generation
 if (typeof (globalThis as any).crypto === 'undefined') {
@@ -30,15 +32,46 @@ export interface ServerOptions {
   authenticator?: Authenticator;
   readinessCheck?: () => boolean;
   catalogService?: CatalogService;
+  toolRouter?: ToolRouter;
   onMcpRequestStart?: (req: Request, res: Response) => void | Promise<void>;
   onMcpRequestCleanup?: (reason: 'finish' | 'close' | 'error') => void;
 }
 
+export interface GatewayMcpServerOptions {
+  catalogService?: CatalogService;
+  toolRouter?: ToolRouter;
+  user?: AuthenticatedUser;
+  clientSignal?: AbortSignal;
+  onDegradedAudit?: () => void;
+}
+
 /**
  * Creates an ephemeral McpServer instance for downstream protocol handling.
- * In Gate G5, publishes the combined dynamic catalog and enforces truthful G5 call boundaries.
+ * Resolves tool calls through the Gate G6 Dynamic Tool Router when provided,
+ * or enforces truthful G5 boundary as fallback.
  */
-export function createGatewayMcpServer(catalogService?: CatalogService): McpServer {
+export function createGatewayMcpServer(
+  catalogOrOptions?: CatalogService | GatewayMcpServerOptions,
+  routerFallback?: ToolRouter
+): McpServer {
+  let catalogService: CatalogService | undefined;
+  let toolRouter: ToolRouter | undefined;
+  let user: AuthenticatedUser | undefined;
+  let clientSignal: AbortSignal | undefined;
+  let onDegradedAudit: (() => void) | undefined;
+
+  if (catalogOrOptions && typeof (catalogOrOptions as any).getSnapshot === 'function') {
+    catalogService = catalogOrOptions as CatalogService;
+    toolRouter = routerFallback;
+  } else if (catalogOrOptions) {
+    const opts = catalogOrOptions as GatewayMcpServerOptions;
+    catalogService = opts.catalogService;
+    toolRouter = opts.toolRouter;
+    user = opts.user;
+    clientSignal = opts.clientSignal;
+    onDegradedAudit = opts.onDegradedAudit;
+  }
+
   const server = new McpServer({
     name: 'urumi-gateway',
     version: '1.0.0',
@@ -68,8 +101,19 @@ export function createGatewayMcpServer(catalogService?: CatalogService): McpServ
     };
   });
 
-  // Handle downstream tools/call: enforce truthful G5 boundary
+  // Handle downstream tools/call via dynamic ToolRouter
   server.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (toolRouter) {
+      return toolRouter.dispatch({
+        publicToolName: request.params.name,
+        arguments: request.params.arguments as Record<string, unknown> | undefined,
+        user,
+        clientSignal,
+        onDegradedAudit,
+      });
+    }
+
+    // Fallback truthful Gate G5 boundary if router is not provided
     const snapshot = catalogService?.getSnapshot();
     const tool = snapshot?.toolsByPublicName.get(request.params.name);
 
@@ -182,7 +226,26 @@ export function createExpressApp(options: ServerOptions): express.Application {
   // Downstream Stateless Streamable HTTP MCP endpoint
   app.post('/mcp', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const startTime = Date.now();
-    const server = createGatewayMcpServer(options.catalogService);
+
+    // Scoped client abort controller for this specific request
+    const clientAbortController = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        clientAbortController.abort(new Error('Client disconnected prematurely before response finished'));
+      }
+    });
+
+    const server = createGatewayMcpServer({
+      catalogService: options.catalogService,
+      toolRouter: options.toolRouter,
+      user: req.user,
+      clientSignal: clientAbortController.signal,
+      onDegradedAudit: () => {
+        if (!res.headersSent) {
+          res.setHeader('X-Urumi-Audit-Status', 'finalization-degraded');
+        }
+      },
+    });
 
     // Idempotent multi-event transport lifecycle cleanup guard
     let isCleanedUp = false;
