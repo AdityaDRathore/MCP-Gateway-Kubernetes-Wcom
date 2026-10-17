@@ -12,7 +12,7 @@
     "test:protocol": "tsx --test --test-concurrency=1 test/protocol/*.test.ts",
     "test": "npm run test:unit && npm run test:protocol",
     "typecheck": "tsc --noEmit",
-    "lint": "echo 'No lint errors in gateway'"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

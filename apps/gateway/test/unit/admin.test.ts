@@ -1,8 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import express, { Request, Response } from 'express';
+import express from 'express';
 import { createAdminRouter } from '../../src/http/admin.js';
-import { FakeAuthenticator } from '../../src/auth/fake-authenticator.js';
+import { FakeAuthenticator } from '../helpers/fake-authenticator.js';
 
 describe('Gateway Admin Prefix Reservation Unit Tests', () => {
   const fakeAuth = new FakeAuthenticator();
@@ -15,7 +15,7 @@ describe('Gateway Admin Prefix Reservation Unit Tests', () => {
   const app = express();
   app.use('/admin/v1', createAdminRouter(fakeAuth));
 
-  // Helper function to simulate HTTP requests against express app via fetch
+  // Helper function to simulate HTTP requests against express app via fetch on ephemeral port
   async function testRoute(method: string, path: string, token?: string) {
     const server = app.listen(0);
     const port = (server.address() as any).port;
@@ -41,6 +41,12 @@ describe('Gateway Admin Prefix Reservation Unit Tests', () => {
     assert.equal(data.error, 'Unauthorized: Missing Authorization header');
   });
 
+  test('rejects unauthenticated OPTIONS request to /admin/v1 with 401', async () => {
+    const { status, data } = await testRoute('OPTIONS', '/admin/v1/upstreams');
+    assert.equal(status, 401);
+    assert.equal(data.error, 'Unauthorized: Missing Authorization header');
+  });
+
   test('rejects member role with 403 Forbidden across admin subpaths', async () => {
     const { status, data } = await testRoute('GET', '/admin/v1/upstreams', 'member_token');
     assert.equal(status, 403);
@@ -48,6 +54,12 @@ describe('Gateway Admin Prefix Reservation Unit Tests', () => {
 
     const res2 = await testRoute('POST', '/admin/v1/api-keys', 'member_token');
     assert.equal(res2.status, 403);
+  });
+
+  test('rejects member role on OPTIONS request with 403 Forbidden', async () => {
+    const { status, data } = await testRoute('OPTIONS', '/admin/v1/upstreams', 'member_token');
+    assert.equal(status, 403);
+    assert.equal(data.error, 'Forbidden: Administrative privileges required');
   });
 
   test('admin role receives HTTP 501 Not Implemented across all subpaths', async () => {
@@ -68,8 +80,8 @@ describe('Gateway Admin Prefix Reservation Unit Tests', () => {
     }
   });
 
-  test('admin role receives HTTP 501 across all HTTP methods', async () => {
-    const methods = ['GET', 'POST', 'PATCH', 'DELETE', 'PUT'];
+  test('admin role receives HTTP 501 across all HTTP methods including OPTIONS', async () => {
+    const methods = ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'];
 
     for (const method of methods) {
       const { status, data } = await testRoute(method, '/admin/v1/upstreams/1', 'admin_token');

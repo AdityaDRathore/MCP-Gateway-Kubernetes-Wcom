@@ -4,12 +4,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createExpressApp } from '../../src/server.js';
 import { parseConfig } from '../../src/config.js';
-import { FakeAuthenticator } from '../../src/auth/fake-authenticator.js';
+import { FakeAuthenticator } from '../helpers/fake-authenticator.js';
 
 describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
-  const TEST_PORT = 7890;
   const config = parseConfig({
-    PORT: String(TEST_PORT),
     HOST: '127.0.0.1',
     MAX_PAYLOAD_SIZE_BYTES: '65536',
   });
@@ -30,11 +28,15 @@ describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
   });
 
   test('Protocol Handshake, Auth Rejections, Body Boundaries, and Idempotent Cleanup', async () => {
-    const server = app.listen(TEST_PORT, '127.0.0.1');
+    // Bind to ephemeral port (listen(0)) to prevent port collisions
+    const server = await new Promise<import('node:http').Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const port = (server.address() as any).port;
 
     try {
       // 1. Unauthenticated request to POST /mcp must fail with HTTP 401
-      const unauthRes = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp`, {
+      const unauthRes = await fetch(`http://127.0.0.1:${port}/mcp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
@@ -44,7 +46,7 @@ describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
       assert.equal(unauthBody.error, 'Unauthorized: Missing Authorization header');
 
       // 2. Invalid API key to POST /mcp must fail with HTTP 401
-      const invalidKeyRes = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp`, {
+      const invalidKeyRes = await fetch(`http://127.0.0.1:${port}/mcp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -57,7 +59,7 @@ describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
       assert.equal(invalidKeyBody.error, 'Unauthorized: Invalid or revoked API key');
 
       // 3. Method validation: Non-POST method (GET /mcp) must return HTTP 405 Method Not Allowed
-      const getRes = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp`, {
+      const getRes = await fetch(`http://127.0.0.1:${port}/mcp`, {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${validMemberToken}`,
@@ -67,7 +69,7 @@ describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
       assert.equal(getRes.headers.get('allow'), 'POST');
 
       // 4. Content-Type validation: Non-JSON body must return HTTP 415 Unsupported Media Type
-      const textRes = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp`, {
+      const textRes = await fetch(`http://127.0.0.1:${port}/mcp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'text/plain',
@@ -78,7 +80,7 @@ describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
       assert.equal(textRes.status, 415, 'Non-JSON Content-Type must return 415');
 
       // 5. Malformed JSON syntax must return HTTP 400 Bad Request
-      const malformedRes = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp`, {
+      const malformedRes = await fetch(`http://127.0.0.1:${port}/mcp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -97,7 +99,7 @@ describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
         id: 3,
         padding: 'A'.repeat(70000), // > 65536 bytes
       });
-      const oversizedRes = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp`, {
+      const oversizedRes = await fetch(`http://127.0.0.1:${port}/mcp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -119,7 +121,7 @@ describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
       );
 
       const transport = new StreamableHTTPClientTransport(
-        new URL(`http://127.0.0.1:${TEST_PORT}/mcp`),
+        new URL(`http://127.0.0.1:${port}/mcp`),
         {
           requestInit: {
             headers: {
@@ -146,10 +148,44 @@ describe('Gateway MCP Protocol and Handshake Protocol Tests', () => {
       await client.close();
 
       // 10. Verify /admin/v1 routes remain private and unexposed
-      const adminRes = await fetch(`http://127.0.0.1:${TEST_PORT}/admin/v1/upstreams`, {
+      const adminRes = await fetch(`http://127.0.0.1:${port}/admin/v1/upstreams`, {
         headers: { Authorization: `Bearer ${validAdminToken}` },
       });
       assert.equal(adminRes.status, 501, 'Admin routes return 501 Not Implemented');
+    } finally {
+      server.close();
+    }
+  });
+
+  test('Client Premature Disconnect and Abort Cleanup Lifecycle', async () => {
+    // Bind to ephemeral port
+    const server = await new Promise<import('node:http').Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const port = (server.address() as any).port;
+
+    try {
+      const abortController = new AbortController();
+
+      // Initiate request and abort immediately
+      const abortPromise = fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${validMemberToken}`,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 99 }),
+        signal: abortController.signal,
+      });
+
+      // Abort connection to trigger req/res disconnect
+      abortController.abort();
+
+      await assert.rejects(abortPromise, /abort/i);
+
+      // Verify server remains fully functional after client premature abort
+      const followUpRes = await fetch(`http://127.0.0.1:${port}/health`);
+      assert.equal(followUpRes.status, 200);
     } finally {
       server.close();
     }

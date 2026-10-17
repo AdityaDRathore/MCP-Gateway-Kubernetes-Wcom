@@ -130,14 +130,18 @@ export function createExpressApp(options: ServerOptions): express.Application {
       if (isCleanedUp) return;
       isCleanedUp = true;
 
-      try {
-        if (transport) {
-          transport.close().catch(() => {});
-        }
-        server.close().catch(() => {});
-      } catch {
-        // Suppress any errors during teardown
+      if (transport) {
+        transport.close().catch((err: unknown) => {
+          logger.warn('Error during transport cleanup close', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
       }
+      server.close().catch((err: unknown) => {
+        logger.warn('Error during server cleanup close', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
 
       logger.debug('MCP request handled and connection cleanly closed', {
         durationMs: Date.now() - startTime,

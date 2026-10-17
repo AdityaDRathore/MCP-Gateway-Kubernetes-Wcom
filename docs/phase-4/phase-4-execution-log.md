@@ -126,7 +126,7 @@
   - **Contract Regression Test (`TEST-GTW-SDK-ABORT-PUBLIC-API` in `test/protocol/sdk-cancellation.test.ts`):**
     - Validates pinned `@modelcontextprotocol/sdk@1.32.1` `RequestOptions.signal` cancellation contract.
     - Shared upstream client multiplexing two concurrent tool calls: Call A cancelled via `signal.abort()`, receives `notifications/cancelled`, Call B completes successfully, subsequent Call C on shared client succeeds.
-  - **Test Results:**
+  - **Test Results (Initial G3 Submission):**
     - Gateway Unit Tests (`test/unit/*.test.ts`): **29 passed, 0 failed** across 6 suites (Config, Auth, Health, Admin, Logger, Shutdown).
     - Gateway Protocol Tests (`test/protocol/*.test.ts`): **2 passed, 0 failed** across 2 suites (MCP Protocol Handshake, SDK Cancellation Regression).
     - Monorepo Test Suite (`npm test`): **100% pass rate** across all workspaces (`mcp-crm`, `mcp-tasks`, `woocommerce-mcp`, `gateway`).
@@ -138,4 +138,64 @@
   - Zero Kubernetes cluster resources mutated or deployed.
   - Zero live WooCommerce store records modified (products 10/11/12 and Order #14 untouched).
   - Strict Node 24 LTS (`v24.20.0`) runtime compliance.
+
+### 7. Gate G3 Remediation: Resolution of Technical Head Review Findings
+- **Timestamp:** 2026-10-17T14:50:00Z
+- **Status:** **PASS (REMEDIATED AND RE-VERIFIED)**
+- **Technical Head Findings Addressed:**
+  1. **Admin Route Contract & OPTIONS Handling (Blocking):**
+     - Verified `router.all('*', ...)` contract explicitly for `OPTIONS` requests.
+     - Unauthenticated `OPTIONS` to `/admin/v1` returns HTTP 401 Unauthorized.
+     - Member role `OPTIONS` to `/admin/v1` returns HTTP 403 Forbidden.
+     - Authenticated admin `OPTIONS` returns HTTP 501 Not Implemented across all paths.
+     - Verified in `apps/gateway/test/unit/admin.test.ts` (suite total expanded from 4 to 6 tests).
+  2. **Non-Silent Teardown & Disconnect Diagnostics (Blocking):**
+     - In `apps/gateway/src/server.ts`, eliminated silent `catch(() => {})` handlers during request cleanup.
+     - Added safe, redacted warning logs (`logger.warn('Transport close error during request cleanup', ...)`) if `transport.close()` or `server.close()` rejects.
+     - Added protocol test `Client Premature Disconnect and Abort Cleanup Lifecycle` in `mcp-protocol.test.ts` verifying that aborting an in-flight request does not leak resources or compromise server health.
+  3. **Ephemeral Port Allocation (Blocking):**
+     - Eliminated hardcoded ports (7890, 7999) across test suites.
+     - Updated `mcp-protocol.test.ts` and `sdk-cancellation.test.ts` to bind dynamically to `server.listen(0, '127.0.0.1')` and resolve bound ports via `server.address().port`, eliminating parallel CI/CD port contention.
+  4. **Request-ID Cancellation Correlation (Blocking):**
+     - In `apps/gateway/test/protocol/sdk-cancellation.test.ts`, captured `callARequestId` and `callBRequestId` from wire-level JSON-RPC payloads.
+     - Asserted exact correlation: `notifications/cancelled` notification contains `params.requestId === callARequestId`.
+     - Asserted sibling isolation: `cancelledNotifications` contains zero entries for `callBRequestId`, and Call B finishes successfully.
+  5. **Synthetic Domain Policy & Adversarial Redaction (High):**
+     - Clarified policy: redaction is treated as defense-in-depth risk reduction, not a guarantee of zero PII leakage.
+     - Refined email regex to `\b[A-Za-z0-9._%+-]+@(?!(?:[A-Za-z0-9-]+\.)*(?:mock|example|test|invalid)\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,63}\b/gi`.
+     - Preserves all synthetic `.mock` domains (e.g. `@alice.mock`, `@sub.domain.mock`) and RFC 2606 / 6761 test domains (`.mock`, `.example`, `.test`, `.invalid`).
+     - Safely redacts real emails with standard and modern long TLDs (up to 63 chars, e.g. `.international`, `.technology`).
+     - Added adversarial tests in `apps/gateway/test/unit/logger.test.ts` (suite total expanded from 6 to 7 tests).
+  6. **Graceful Shutdown Exit Code Distinction (Medium):**
+     - In `apps/gateway/src/lifecycle.ts`, clean socket drain results in `process.exit(0)`.
+     - Expiration of `DRAIN_TIMEOUT_MS` forcing lingering connection destruction results in `process.exit(1)`.
+     - Verified in `apps/gateway/test/unit/shutdown.test.ts` with custom exit handler hooks for both clean and timeout paths.
+  7. **Real Linter Configuration (Medium):**
+     - Replaced placeholder echo script in `apps/gateway/package.json` with `"lint": "tsc --noEmit"`.
+     - Verified clean execution (`npm --workspace=gateway run lint` exited code 0).
+  8. **FakeAuthenticator Physical Confinement (Architecture):**
+     - Removed `apps/gateway/src/auth/fake-authenticator.ts` from application source tree.
+     - Relocated test authenticator to `apps/gateway/test/helpers/fake-authenticator.ts`.
+     - Confirms `src/` contains zero test authenticators and `FailClosedAuthenticator` is the sole production authenticator.
+  9. **Reconciled Test Evidence & Execution Counts (Medium):**
+     - **Gateway Unit Tests (`npm --workspace=gateway run test:unit`):** **31 passed, 0 failed across 6 suites**
+       - `admin.test.ts`: 6 tests
+       - `auth.test.ts`: 6 tests
+       - `config.test.ts`: 6 tests
+       - `health.test.ts`: 4 tests
+       - `logger.test.ts`: 7 tests
+       - `shutdown.test.ts`: 2 tests
+     - **Gateway Protocol Tests (`npm --workspace=gateway run test:protocol`):** **3 passed, 0 failed across 2 suites**
+       - `mcp-protocol.test.ts`: 2 tests (Handshake + Client Premature Disconnect)
+       - `sdk-cancellation.test.ts`: 1 test (Request-ID Correlated Abort + Sibling Isolation)
+     - **Gateway Total:** **34 passed, 0 failed across 8 suites**
+     - **Monorepo Build (`npm run build`):** Clean build across all 5 workspaces with 0 errors.
+     - **Monorepo Tests (`npm test`):** **162 tests passed, 0 failed** (`gateway`: 34, `woocommerce-mcp`: 81, `mcp-tasks`: 35, `mcp-crm`: 12).
+- **Scope Invariants Preserved:**
+  - Zero Gate G4 SQLite / token database code introduced.
+  - Zero Gate G5 Upstream Aggregation code introduced.
+  - Zero Gate G6 Upstream Router code introduced.
+  - Zero Kubernetes or Helm modifications made.
+  - Zero live store records mutated.
+
 

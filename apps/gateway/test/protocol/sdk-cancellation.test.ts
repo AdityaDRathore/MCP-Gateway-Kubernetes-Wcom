@@ -27,26 +27,37 @@ if (typeof (global as any).crypto === 'undefined') {
  * Invariants Proven:
  * 1. Multiplexed shared client allows cancelling Call A via `signal.abort()` without closing transport.
  * 2. Cancelled Call A rejects with abort indication.
- * 3. SDK automatically formats and transmits `notifications/cancelled` to upstream for Call A's request ID.
- * 4. Concurrent sibling Call B running on the same client completes successfully.
+ * 3. SDK automatically formats and transmits `notifications/cancelled` targeting Call A's EXACT request ID.
+ * 4. Sibling Call B's request ID is NOT cancelled and Call B completes successfully.
  * 5. Subsequent Call C on the shared client succeeds without session contamination.
+ * 6. Dynamic ephemeral port binding (listen(0)) prevents CI/CD port collision.
  * 
  * Note (Per Technical Head Guidance):
  * This is an isolated SDK contract test using a controlled in-test mock server.
  * It establishes the prerequisite SDK cancellation contract before gateway upstream routing is built in G6.
  */
 describe('TEST-GTW-SDK-ABORT-PUBLIC-API: SDK Cancellation Contract Regression Suite', () => {
-  const TEST_PORT = 7999;
-
-  test('Public SDK cancellation on shared client sends notifications/cancelled without disrupting sibling calls', async () => {
+  test('Public SDK cancellation on shared client sends notifications/cancelled with exact request ID correlation without disrupting sibling calls', async () => {
+    let callARequestId: number | string | null = null;
+    let callBRequestId: number | string | null = null;
     const cancelledNotifications: Array<{ requestId: number | string; reason?: string }> = [];
 
     // Create standalone mock upstream server
     const app = express();
     app.use(express.json());
 
-    // Middleware to record notifications/cancelled messages from SDK client
+    // Middleware to capture request IDs and record notifications/cancelled messages from SDK client
     app.use('/mcp', (req: Request, _res: Response, next) => {
+      if (req.body?.method === 'tools/call') {
+        if (req.body?.params?.name === 'slow_operation') {
+          callARequestId = req.body.id;
+        } else if (
+          req.body?.params?.name === 'fast_operation' &&
+          req.body?.params?.arguments?.id === 'sibling-call-b'
+        ) {
+          callBRequestId = req.body.id;
+        }
+      }
       if (req.body?.method === 'notifications/cancelled') {
         cancelledNotifications.push(req.body.params);
       }
@@ -92,12 +103,16 @@ describe('TEST-GTW-SDK-ABORT-PUBLIC-API: SDK Cancellation Contract Regression Su
       await transport.handleRequest(req, res, req.body);
 
       res.on('close', () => {
-        transport.close();
-        server.close();
+        transport.close().catch(() => {});
+        server.close().catch(() => {});
       });
     });
 
-    const httpServer = app.listen(TEST_PORT, '127.0.0.1');
+    // Ephemeral port allocation (listen(0)) to prevent process/CI port collisions
+    const httpServer = await new Promise<import('node:http').Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const boundPort = (httpServer.address() as any).port;
 
     try {
       // Create single shared client multiplexing over StreamableHTTPClientTransport
@@ -107,7 +122,7 @@ describe('TEST-GTW-SDK-ABORT-PUBLIC-API: SDK Cancellation Contract Regression Su
       );
 
       const clientTransport = new StreamableHTTPClientTransport(
-        new URL(`http://127.0.0.1:${TEST_PORT}/mcp`)
+        new URL(`http://127.0.0.1:${boundPort}/mcp`)
       );
 
       await sharedClient.connect(clientTransport);
@@ -162,17 +177,30 @@ describe('TEST-GTW-SDK-ABORT-PUBLIC-API: SDK Cancellation Contract Regression Su
       assert.equal(resultB.content[0].type, 'text');
       assert.equal((resultB.content[0] as any).text, 'fast_operation_completed:sibling-call-b');
 
-      // Step 6: Verify upstream mock server received `notifications/cancelled` notification
-      // Small pause to allow async cancellation notification HTTP POST to flush
+      // Step 6: Verify exact Request ID correlation in notifications/cancelled
+      // Allow async cancellation notification HTTP POST to flush
       await new Promise((resolve) => setTimeout(resolve, 150));
-      assert.ok(
-        cancelledNotifications.length >= 1,
-        'Upstream must receive at least one notifications/cancelled message'
+
+      assert.ok(callARequestId !== null, 'Server must have captured Call A request ID');
+      assert.ok(callBRequestId !== null, 'Server must have captured Call B request ID');
+      assert.notEqual(callARequestId, callBRequestId, 'Call A and Call B must have distinct request IDs');
+
+      // Prove that the cancellation notification specifically matches Call A's request ID
+      const matchingCancelled = cancelledNotifications.find(
+        (n) => n.requestId === callARequestId
       );
       assert.ok(
-        cancelledNotifications.some((n) => String(n.reason).includes('Aborted')),
+        matchingCancelled,
+        `Upstream must receive notifications/cancelled specifically for Call A request ID ${callARequestId}`
+      );
+      assert.ok(
+        String(matchingCancelled.reason).includes('Aborted'),
         'Cancelled notification must report the abort reason'
       );
+
+      // Prove that Call B's request ID was NEVER cancelled
+      const bWasCancelled = cancelledNotifications.some((n) => n.requestId === callBRequestId);
+      assert.equal(bWasCancelled, false, 'Call B request ID must NEVER be cancelled');
 
       // Step 7: Verify subsequent Call C on the shared client succeeds
       const resultC = await sharedClient.request(

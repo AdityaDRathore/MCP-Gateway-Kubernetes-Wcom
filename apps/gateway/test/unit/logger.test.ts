@@ -18,12 +18,49 @@ describe('Gateway Structured Redacted Logger Unit Tests', () => {
     assert.equal(sanitized, 'Created key: [REDACTED_API_KEY]');
   });
 
-  test('sanitizeString scrubs real emails while preserving synthetic .example.mock fixtures', () => {
-    const realEmail = 'Contact user john.doe@acme-corp.com for support';
-    assert.equal(sanitizeString(realEmail), 'Contact user [REDACTED_EMAIL] for support');
+  test('sanitizeString scrubs real emails (including long TLDs) while preserving synthetic .mock and RFC test domains', () => {
+    // Real standard emails
+    assert.equal(
+      sanitizeString('Contact user john.doe@acme-corp.com for support'),
+      'Contact user [REDACTED_EMAIL] for support'
+    );
 
-    const syntheticMockEmail = 'Contact synthetic user test.user@example.mock for fixtures';
-    assert.equal(sanitizeString(syntheticMockEmail), syntheticMockEmail);
+    // Real emails with long modern TLDs (adversarial cases)
+    assert.equal(
+      sanitizeString('Alert sent to admin@corporation.international regarding cluster'),
+      'Alert sent to [REDACTED_EMAIL] regarding cluster'
+    );
+    assert.equal(
+      sanitizeString('Photographer user jane@studio.photography uploaded photo'),
+      'Photographer user [REDACTED_EMAIL] uploaded photo'
+    );
+    assert.equal(
+      sanitizeString('Contact DevOps at devops@cloud.technology immediately'),
+      'Contact DevOps at [REDACTED_EMAIL] immediately'
+    );
+
+    // Uppercase real emails
+    assert.equal(
+      sanitizeString('USER JOHN.DOE@ACME-CORP.COM LOGGED IN'),
+      'USER [REDACTED_EMAIL] LOGGED IN'
+    );
+
+    // Synthetic .mock domains (single-level and nested subdomains)
+    const mockEmail1 = 'Contact synthetic user test.user@example.mock for fixtures';
+    assert.equal(sanitizeString(mockEmail1), mockEmail1);
+
+    const mockEmail2 = 'Task assigned to agent@crm.example.mock for verification';
+    assert.equal(sanitizeString(mockEmail2), mockEmail2);
+
+    const mockEmail3 = 'System notification from bot@urumi.mock';
+    assert.equal(sanitizeString(mockEmail3), mockEmail3);
+
+    // RFC-reserved test domains (.example, .test, .invalid)
+    const rfcExample = 'Notice to user@domain.example';
+    assert.equal(sanitizeString(rfcExample), rfcExample);
+
+    const rfcTest = 'Notice to tester@unit.test';
+    assert.equal(sanitizeString(rfcTest), rfcTest);
   });
 
   test('redactSensitiveData recursively redacts nested objects and sensitive keys', () => {

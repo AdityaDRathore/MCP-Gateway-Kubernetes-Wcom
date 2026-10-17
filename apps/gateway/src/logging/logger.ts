@@ -1,6 +1,10 @@
 /**
  * Structured Redacted JSON Logger for Urumi Team MCP Gateway.
- * Guarantees zero credential, API key, and sensitive customer data leakage to stdout/stderr.
+ * 
+ * Policy:
+ * Log redaction serves as a defense-in-depth risk reduction measure to prevent
+ * accidental leakage of credentials, tokens, and PII into log sinks.
+ * It is not an absolute cryptographic boundary against arbitrary unstructured text.
  */
 
 const SENSITIVE_KEY_PATTERNS = [
@@ -36,9 +40,10 @@ export function sanitizeString(value: string): string {
   // Redact credentials in query strings or assignments
   sanitized = sanitized.replace(/(?:password|secret|token|api_key)=([^&\s]+)/gi, '$1=[REDACTED]');
 
-  // Redact real emails (exclude RFC-reserved .mock and .example domains)
+  // Redact real emails while preserving RFC-reserved test domains and synthetic .mock domains
+  // Matches TLDs from 2 to 63 chars (RFC 1034), excluding .mock, .example, .test, and .invalid
   sanitized = sanitized.replace(
-    /\b[A-Za-z0-9._%+-]+@(?!example\.mock\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,7}\b/g,
+    /\b[A-Za-z0-9._%+-]+@(?!(?:[A-Za-z0-9-]+\.)*(?:mock|example|test|invalid)\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,63}\b/gi,
     '[REDACTED_EMAIL]'
   );
 

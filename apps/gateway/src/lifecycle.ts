@@ -84,7 +84,8 @@ export class LifecycleManager {
           }
         }
         this.sockets.clear();
-        finish(0);
+        // Exit code 1 indicates forced termination due to exceeded drain deadline
+        finish(1);
       }, this.config.DRAIN_TIMEOUT_MS);
 
       // Unref timer so it doesn't hold event loop open if closed naturally
@@ -95,10 +96,11 @@ export class LifecycleManager {
       this.server.close((err?: Error) => {
         if (err) {
           logger.error('Error during server.close()', { error: err.message });
+          finish(1);
         } else {
           logger.info('HTTP server closed cleanly, all in-flight connections drained');
+          finish(0);
         }
-        finish(0);
       });
     });
   }

@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Request, Response, NextFunction } from 'express';
 import { FailClosedAuthenticator } from '../../src/auth/authenticator.js';
-import { FakeAuthenticator } from '../../src/auth/fake-authenticator.js';
+import { FakeAuthenticator } from '../helpers/fake-authenticator.js';
 import { createAuthMiddleware, AuthenticatedRequest } from '../../src/auth/middleware.js';
 
 describe('Gateway Authentication Unit Tests', () => {

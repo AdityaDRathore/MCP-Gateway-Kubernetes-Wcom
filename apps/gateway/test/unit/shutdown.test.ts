@@ -64,6 +64,7 @@ describe('Gateway Graceful Shutdown Coordinator Unit Tests', () => {
 
     await Promise.all([stopPromise, socketClosed]);
 
-    assert.equal(exitCode, 0);
+    // Exit code 1 verifies distinction between clean drain (0) and forced termination (1)
+    assert.equal(exitCode, 1);
   });
 });
