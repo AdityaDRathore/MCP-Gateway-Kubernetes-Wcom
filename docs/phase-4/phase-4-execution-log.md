@@ -20,7 +20,7 @@
 | **G4** | SQLite Persistence, API Keys, Bootstrap & Two-Phase Audit | **PASS** | Remediation implemented & verified; pending Technical Head review | 2026-10-17 |
 | **G5** | Upstream Aggregation Manager & Dynamic Tool Catalog | **PASS** | Formally accepted & verified with G5-R1 remediation | 2026-10-17 |
 | **G6** | Gateway Router, Deadlines, Concurrency & Resilience | **PASS** | Implemented & verified with 100% test pass rate across unit and protocol suites | 2026-10-17 |
-| **G7** | Dynamic Admin API & Kubernetes Secret Lifecycle | PENDING | Awaiting G6 completion & review | — |
+| **G7** | Dynamic Admin API & Kubernetes Secret Lifecycle | **PASS** | Implemented & verified with 100% test pass rate across unit and protocol suites | 2026-10-18 |
 | **G8** | Docker, Helm Chart, PVC & NetworkPolicy Integration | PENDING | Awaiting G7 completion & review | — |
 | **G9** | End-to-End Acceptance, Performance Benchmarking & Closure | PENDING | Awaiting G8 completion & review | — |
 
@@ -417,6 +417,91 @@
   - Zero Gate G8 Docker, Helm chart, PVC, or NetworkPolicy code introduced.
   - Zero Kubernetes manifests or cluster resources mutated.
   - Zero live WooCommerce store records modified (baseline products 10, 11, 12 and Order #14 remain strictly untouched).
+
+### 10. Gate G7: Dynamic Admin API & Kubernetes Secret Lifecycle
+- **Timestamp:** 2026-10-18T11:40:00Z
+- **Status:** **PASS (IMPLEMENTED AND FULLY VERIFIED)**
+- **Baseline Git HEAD:** `c0176b02a76f2d5743126be1f7d5c5f49dfdddb8`
+- **Implementation Commit SHA:** `94a5fb626f10c605eca30824f9c4d04388dcc6d5`
+- **Scope Implemented (`apps/gateway`):**
+  - **1. Authenticated Administrative REST API (`src/http/admin.ts`, `src/admin/admin-types.ts`):**
+    - Mounted at `/admin/v1/upstreams` with strict Bearer token authentication and role verification.
+    - Role guard middleware (`requireAdminRole`) strictly rejects unauthenticated calls (HTTP 401) and member tokens (HTTP 403 `Forbidden: Administrative privileges required`).
+    - Administrative identity or role supplied solely in the request body is rejected; server-side token identity is enforced.
+    - Request body size strictly capped at 64 KiB (`express.json({ limit: 65536 })` returning HTTP 413 Payload Too Large on overflow).
+    - Input schemas validated via Zod `.strict()` rejecting unknown fields:
+      - `POST /admin/v1/upstreams`: Create upstream with Saga orchestration across SQLite, Kubernetes Secrets, and runtime catalog discovery (HTTP 201 Created).
+      - `GET /admin/v1/upstreams`: List all registered upstreams merged with live runtime health telemetry (HTTP 200 OK).
+      - `GET /admin/v1/upstreams/:id`: Inspect individual upstream by UUID or slug (HTTP 200 OK).
+      - `PATCH /admin/v1/upstreams/:id`: Update configuration (`displayName`, `endpointUrl`, `timeoutMs`) or rotate credentials (`credential`, `credentials`, `credentialKey`) (HTTP 200 OK).
+      - `POST /admin/v1/upstreams/:id/disable`: Disable upstream; immediately removes tools from catalog snapshot while in-flight router calls drain (HTTP 200 OK).
+      - `POST /admin/v1/upstreams/:id/enable`: Re-enable upstream after connectivity validation (HTTP 200 OK).
+      - `DELETE /admin/v1/upstreams/:id`: Safe deletion lifecycle; purges runtime client, removes Secret, and deletes SQLite record (HTTP 200 OK).
+      - `POST /admin/v1/upstreams/:id/retry-cleanup`: Dedicated operator endpoint for resources in `cleanup_required` (HTTP 200 OK).
+    - URL validation reuses canonical G5 SSRF validator (`validateAndNormalizeUpstreamUrl`): enforces plain HTTP, port 3000, `/mcp` path, approved internal cluster FQDN, anti-traversal, and rejection of IP literals.
+    - Backward-compatible stub fallback: if `AdminService` is unconfigured, returns HTTP 501 Not Implemented.
+  - **2. Direct Kubernetes Secret Client & Manager (`src/k8s/`):**
+    - `DirectKubernetesSecretClient` (`secret-client.ts`):
+      - Lightweight, zero-external-dependency Kubernetes API client using `node:https` and `node:http`.
+      - In-cluster ServiceAccount token dynamic reading from `/var/run/secrets/kubernetes.io/serviceaccount/token`.
+      - Strict TLS certificate verification against cluster CA certificate `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`.
+      - Explicit request timeouts (10,000ms) with `AbortSignal` cleanup.
+      - Kubernetes `Status` error response parser: classifies `KubernetesNotFoundError` (404), `KubernetesConflictError` (409), `KubernetesAuthError` (401/403), `KubernetesTimeoutError`.
+      - Strict credential redaction: error messages and stack traces scrub all tokens and secret values.
+    - `SecretManager` (`secret-manager.ts`):
+      - Configurable namespace bounded to RFC 1123 DNS labels, defaulting to `urumi-gateway-secrets`. Strictly prohibits system and workload namespaces (`urumi`, `default`, `kube-system`, `kube-public`, `kube-node-lease`).
+      - Deterministic collision-resistant Secret naming: `upstream-sec-${slug}-${hash8}` where hash8 is derived from SHA-256 of the upstream UUID.
+      - Standard labels: `app.kubernetes.io/managed-by: urumi-gateway`, `app.kubernetes.io/name: urumi-platform`, `urumi.io/upstream-slug: ${slug}`.
+      - Ownership verification: asserts `managed-by === 'urumi-gateway'` and `upstream-slug === slug` prior to any delete operation.
+      - Multi-key credentials contract: supports single token string (`token`), custom key name (`credentialKey`), or multi-key credential maps (`credentials`) matching any upstream authentication contract.
+      - Zero secret leakage invariant: credentials never stored in SQLite, never returned in DTOs, never logged, and never included in audit payloads.
+  - **3. Lifecycle Coordination & Saga Compensation (`src/admin/admin-service.ts`):**
+    - Explicit lifecycle states: `provisioning`, `active`, `disabled`, `deleting`, `cleanup_required`, `failed`.
+    - In-process locks (`activeLocks: Set<string>`) preventing concurrent conflicting mutations on identical slugs (HTTP 409 Conflict).
+    - Compensation on Secret creation failure: marks SQLite row `failed`, audits, releases lock.
+    - Compensation on tool discovery failure: issues deleteSecret to purge Secret, marks SQLite row `failed`, audits, releases lock.
+    - Truly recoverable delete contract: If K8s Secret deletion fails during `deleteUpstream`, the SQLite record is STRICTLY preserved in `cleanup_required` with `cleanup_error`; never deletes the database row until Secret deletion is confirmed.
+  - **4. Startup Reconciliation & Orphan Sweep:**
+    - Stale `provisioning` entries (>120s old): proves no active in-process lock exists, verifies K8s Secret ownership labels, deletes Secret, and marks row `failed`.
+    - `deleting` and `cleanup_required` entries: retries Secret deletion and finalizes SQLite row deletion upon confirmation.
+    - Unreferenced orphaned Secrets in K8s: enforces ADR-017 5-minute (300s) grace period; secrets younger than 300s are retained; older unreferenced secrets are deleted with structured audit records.
+    - Active rows with missing Secrets: detected on startup, deactivated from runtime manager, marked `failed`, and logged to alert operators.
+  - **5. Two-Phase Audit Logging Integration (`src/audit/audit-service.ts`):**
+    - Phase 1 (`startAdminAudit`): commits pending audit record before external side effects; fails closed (throws `AuditStartError`) if SQLite audit write fails, halting before any K8s Secret or SQLite upstream insertion.
+    - Phase 2 (`finalizeAdminAudit`): finalizes status; if audit write fails after K8s side effects, returns `degraded: true`, emits `X-Urumi-Audit-Status: finalization-degraded` HTTP header, and flags `auditDegraded: true` in response DTO.
+  - **6. Dynamic Upstream Client Authentication (`src/upstream/upstream-client.ts`, `upstream-manager.ts`):**
+    - Dynamic discovery via `registerAndDiscover(row)` and instant catalog snapshot refresh.
+    - `credentialsResolver` fetches Secret from K8s and configures HTTP `Authorization: Bearer <token>` or `X-API-Key`.
+    - Safe client teardown on disable or delete without disrupting sibling upstreams.
+- **Verification Evidence:**
+  - **Gateway Unit Tests (`npm --workspace=gateway run test:unit`):** **198 passed, 0 failed across 25 suites**:
+    - `admin-api.test.ts`: **13 tests** (401 unauthenticated across all verbs, 403 member token across all verbs, 413 request body size limit, 400 invalid slug, 400 SSRF invalid URL, 400 unknown property, 409 conflict, 201 create with zero credential leak, 200 get, 200 patch, 200 disable, 200 enable, 200 delete).
+    - `admin-service.test.ts`: **13 tests** (successful saga with secret and discovery, secret failure compensation, discovery failure compensation, duplicate slug rejection, SSRF rejection, update and rotation, disable/enable lifecycle, delete cleanly, delete to cleanup_required on secret failure, retry cleanup, no-secret upstream creation, multi-key credential creation, Phase 1 audit fail-closed, Phase 2 audit degradation).
+    - `secret-manager.test.ts`: **10 tests** (namespace security boundary, deterministic naming, secret creation with labels and token, multi-key credential creation, rotation with resourceVersion, refusal to delete on slug mismatch, refusal to delete on managed-by mismatch, successful deletion, reconcileOrphans with 5-minute grace period, error sanitization).
+    - `reconciliation.test.ts`: **8 tests** (stale provisioning reconciled, fresh provisioning preserved, active locks skipped, cleanup_required retried, unreferenced orphan deleted after 300s, fresh orphan preserved within 300s, active upstream with missing secret flagged, startup reconciliation orchestration).
+    - Plus all 21 existing unit test suites (auth, config, health, logger, shutdown, db, ssrf, tool-validator, upstream-client, catalog-service, circuit-breaker, concurrency-limiter, tool-router, etc.).
+  - **Gateway Protocol Tests (`npm --workspace=gateway run test:protocol`):** **10 passed, 0 failed across 6 suites**:
+    - `admin-protocol.test.ts`: **2 tests**:
+      - Live administrative CRUD over ephemeral HTTP port + dynamic catalog synchronization with downstream MCP client (401, 403, 400, 201 create with zero secrets leak -> downstream client immediately receives tools; disable -> tools removed; enable -> tools restored; patch -> credentials rotated; delete -> tools removed, Secret deleted, SQLite row deleted).
+      - HTTP delete failure preservation in `cleanup_required` + successful retryCleanup.
+    - `gateway-catalog.test.ts`: 1 test.
+    - `mcp-protocol.test.ts`: 2 tests.
+    - `sdk-cancellation.test.ts`: 1 test.
+    - `tool-routing.test.ts`: 1 test.
+    - `upstream-discovery.test.ts`: 3 tests.
+  - **Monorepo Build (`npm run build`):** Clean build across all 5 workspaces (`gateway`, `woocommerce-mcp`, `mcp-tasks`, `mcp-crm`, `@urumi/shared`) with 0 TypeScript errors.
+  - **Monorepo Lint (`npm run lint`):** 0 lint errors across all workspaces.
+  - **Monorepo Test Suite (`npm test`):** **340 passed, 0 failed across 4 workspaces**:
+    - `apps/gateway`: 208 passed (198 unit, 10 protocol).
+    - `apps/woocommerce-mcp`: 81 passed (46 unit, 35 protocol).
+    - `apps/mcp-tasks`: 35 passed (27 unit, 8 protocol).
+    - `apps/mcp-crm`: 26 passed (20 unit, 6 protocol).
+- **Scope Invariants Preserved:**
+  - Zero Gate G8 Docker, Helm chart, PVC, or NetworkPolicy code introduced.
+  - Zero Kubernetes manifests or cluster resources mutated.
+  - Zero live WooCommerce store records modified (baseline products 10, 11, 12 and Order #14 remain strictly untouched).
+  - Defined exact Kubernetes RBAC requirements for G8 (`Role` in namespace `urumi-gateway-secrets` with apiGroups `[""]`, resources `["secrets"]`, verbs `["get", "list", "create", "update", "delete"]`).
+
 
 
 
