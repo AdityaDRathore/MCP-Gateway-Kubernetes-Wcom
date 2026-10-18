@@ -103,23 +103,45 @@ export class ManagedUpstreamClient {
       }
 
       headers = {};
-      const targetKey = this.config.secretRefKey || 'token';
+      const targetKeySpec = this.config.secretRefKey || 'token';
+      const requiredKeys = targetKeySpec.split(',').map((k) => k.trim()).filter(Boolean);
 
-      if (secretData[targetKey]) {
-        if (targetKey.toLowerCase().includes('token') || targetKey.toLowerCase().includes('bearer')) {
-          headers['Authorization'] = `Bearer ${secretData[targetKey]}`;
-        } else if (targetKey.toLowerCase().includes('api') || targetKey.toLowerCase().includes('key')) {
-          headers['X-API-Key'] = secretData[targetKey];
-        } else {
-          headers[targetKey] = secretData[targetKey];
+      if (requiredKeys.length === 0) {
+        throw new UpstreamConnectionError(
+          `Upstream service '${this.config.slug}' has an invalid empty credential key configuration`
+        );
+      }
+
+      // Explicit per-upstream authentication contract:
+      // Every required key must exist in secretData and be non-empty.
+      // Missing required credentials MUST fail closed; never silently fall back or substitute credentials.
+      for (const reqKey of requiredKeys) {
+        const val = secretData[reqKey];
+        if (typeof val !== 'string' || val.trim().length === 0) {
+          throw new UpstreamConnectionError(
+            `Upstream service '${this.config.slug}' requires credential key '${reqKey}' in Kubernetes Secret '${this.config.secretRefName}', but it was not found or is empty`
+          );
         }
-      } else if (secretData['token']) {
-        headers['Authorization'] = `Bearer ${secretData['token']}`;
-      } else if (secretData['apiKey'] || secretData['api_key']) {
-        headers['X-API-Key'] = secretData['apiKey'] || secretData['api_key'];
-      } else {
-        for (const [k, v] of Object.entries(secretData)) {
-          headers[k] = v;
+
+        // Validate against CRLF injection in credential header values
+        if (/[\r\n]/.test(val)) {
+          throw new UpstreamConnectionError(
+            `Credential value for key '${reqKey}' contains illegal CRLF characters`
+          );
+        }
+
+        const lowerKey = reqKey.toLowerCase();
+        if (lowerKey === 'token' || lowerKey === 'bearer') {
+          headers['Authorization'] = `Bearer ${val}`;
+        } else if (lowerKey === 'api-key' || lowerKey === 'apikey' || lowerKey === 'x-api-key') {
+          headers['X-API-Key'] = val;
+        } else if (/^[A-Za-z0-9_-]+$/.test(reqKey)) {
+          // Explicit custom HTTP header token matching RFC 7230 token rules
+          headers[reqKey] = val;
+        } else {
+          throw new UpstreamConnectionError(
+            `Credential key '${reqKey}' is not a valid HTTP header token and has no mapped authentication scheme`
+          );
         }
       }
     }

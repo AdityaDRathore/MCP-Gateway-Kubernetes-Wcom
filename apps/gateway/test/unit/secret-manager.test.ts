@@ -1,6 +1,7 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { SecretManager } from '../../src/k8s/secret-manager.js';
+import { DirectKubernetesSecretClient } from '../../src/k8s/secret-client.js';
 import { MockKubernetesSecretClient } from '../helpers/mock-secret-client.js';
 
 describe('Gate G7: Kubernetes Secret Manager Unit Tests', () => {
@@ -261,5 +262,47 @@ describe('Gate G7: Kubernetes Secret Manager Unit Tests', () => {
         return true;
       }
     );
+  });
+
+  test('DirectKubernetesSecretClient rejects plain HTTP, userinfo, metadata, and production insecureSkipTlsVerify', () => {
+    // 1. Plain HTTP rejected
+    assert.throws(
+      () => new DirectKubernetesSecretClient({ apiUrl: 'http://kubernetes.default.svc:80' }),
+      /Kubernetes API URL must use HTTPS protocol/
+    );
+
+    // 2. Embedded userinfo credentials rejected
+    assert.throws(
+      () => new DirectKubernetesSecretClient({ apiUrl: 'https://admin:pass@kubernetes.default.svc:443' }),
+      /must not contain embedded userinfo credentials/
+    );
+
+    // 3. Prohibited cloud metadata destination rejected
+    assert.throws(
+      () => new DirectKubernetesSecretClient({ apiUrl: 'https://169.254.169.254:443' }),
+      /destination "169.254.169.254" is prohibited/
+    );
+
+    // 4. Query parameters or fragments rejected
+    assert.throws(
+      () => new DirectKubernetesSecretClient({ apiUrl: 'https://kubernetes.default.svc:443?token=leak' }),
+      /must not contain query parameters or fragments/
+    );
+
+    // 5. Insecure TLS skip rejected in production mode
+    const originalEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      assert.throws(
+        () =>
+          new DirectKubernetesSecretClient({
+            apiUrl: 'https://kubernetes.default.svc:443',
+            insecureSkipTlsVerify: true,
+          }),
+        /insecureSkipTlsVerify is strictly prohibited in production mode/
+      );
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
   });
 });

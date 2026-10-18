@@ -341,23 +341,34 @@ export class AdminService {
         }
       }
 
-      // Handle credential rotation / creation
+      // Handle credential rotation / creation with recoverable Saga workflow
       let secretRefName = existing.secret_ref_name;
       let secretRefKey = existing.secret_ref_key;
       const hasNewCredentials = Boolean(updates.credential || updates.credentials);
+      let previousSecretData: Record<string, string> | null = null;
+      let newlyCreatedSecretName: string | null = null;
 
       if (hasNewCredentials) {
         const credsToStore = updates.credentials || updates.credential!;
         const defaultKey = updates.credentialKey || 'token';
 
         if (existing.secret_ref_name) {
-          // Rotate existing Secret
+          // 1. Capture previous Secret state for safe rollback
+          previousSecretData = await this.secretManager.getSecretData(existing.secret_ref_name);
+          if (!previousSecretData) {
+            throw new AdminDependencyError(
+              `Cannot rotate credentials: Kubernetes Secret "${existing.secret_ref_name}" was not found`
+            );
+          }
+
+          // 2. Perform rotation in Kubernetes
           await this.secretManager.updateUpstreamSecret(
             existing.slug,
             existing.secret_ref_name,
             credsToStore,
             defaultKey
           );
+
           if (updates.credentialKey || updates.credentials) {
             secretRefKey = updates.credentialKey || Object.keys(updates.credentials!).join(',');
           }
@@ -370,30 +381,124 @@ export class AdminService {
             credsToStore,
             defaultKey
           );
+          newlyCreatedSecretName = newSecretName;
           secretRefName = newSecretName;
           secretRefKey = updates.credentialKey || (updates.credentials ? Object.keys(updates.credentials).join(',') : 'token');
         }
       }
 
-      const updatedRow = this.upstreamRepo.updateUpstream(existing.slug, {
-        displayName: updates.displayName,
-        endpointUrl: normalizedUrl,
-        timeoutMs: updates.timeoutMs,
-        secretRefName,
-        secretRefKey,
-      });
-
-      if (!updatedRow) {
-        this.auditService.finalizeAdminAudit(auditId, {
-          status: 'failed',
-          startTimeMs: startTime,
-          errorCode: 'UPDATE_FAILED',
+      // 3. Persist configuration in SQLite
+      let updatedRow: UpstreamRow | null = null;
+      try {
+        updatedRow = this.upstreamRepo.updateUpstream(existing.slug, {
+          displayName: updates.displayName,
+          endpointUrl: normalizedUrl,
+          timeoutMs: updates.timeoutMs,
+          secretRefName,
+          secretRefKey,
+          cleanupError: null,
         });
-        throw new AdminNotFoundError(`Failed to update upstream "${existing.slug}"`);
+
+        if (!updatedRow) {
+          throw new Error(`Upstream "${existing.slug}" record could not be updated in database`);
+        }
+      } catch (dbErr: unknown) {
+        // SQLite update failed after Kubernetes Secret mutation!
+        // SAGA COMPENSATION: Restore previous Secret state in Kubernetes or delete newly created secret
+        logger.error('Database update failed after Secret update; executing compensation rollback', {
+          slug: existing.slug,
+          error: dbErr instanceof Error ? dbErr.message : String(dbErr),
+        });
+
+        let rollbackFailed = false;
+        let rollbackErrorMsg = '';
+
+        if (previousSecretData && existing.secret_ref_name) {
+          try {
+            await this.secretManager.updateUpstreamSecret(
+              existing.slug,
+              existing.secret_ref_name,
+              previousSecretData,
+              existing.secret_ref_key || 'token'
+            );
+          } catch (rErr: unknown) {
+            rollbackFailed = true;
+            rollbackErrorMsg = rErr instanceof Error ? rErr.message : String(rErr);
+          }
+        } else if (newlyCreatedSecretName) {
+          try {
+            await this.secretManager.deleteUpstreamSecret(existing.slug, newlyCreatedSecretName);
+          } catch (rErr: unknown) {
+            rollbackFailed = true;
+            rollbackErrorMsg = rErr instanceof Error ? rErr.message : String(rErr);
+          }
+        }
+
+        if (rollbackFailed) {
+          this.upstreamRepo.updateUpstream(existing.slug, {
+            status: 'cleanup_required',
+            cleanupError: `Rotation partially failed: database write failed and Secret rollback failed: ${rollbackErrorMsg}`,
+          });
+        }
+
+        throw new AdminDependencyError(
+          `Failed to update upstream configuration in database: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}. ${rollbackFailed ? 'Secret rollback also failed; marked for reconciliation.' : 'Secret state successfully rolled back.'}`
+        );
       }
 
-      // Refresh client and dynamic catalog
-      await this.upstreamManager.updateClient(updatedRow);
+      // 4. Update live runtime client and discover tools
+      try {
+        await this.upstreamManager.updateClient(updatedRow);
+      } catch (clientErr: unknown) {
+        // Runtime client update failed!
+        // SAGA COMPENSATION: Rollback Secret in Kubernetes AND rollback SQLite row to existing
+        logger.error('Runtime client update failed after rotation; executing compensation rollback', {
+          slug: existing.slug,
+          error: clientErr instanceof Error ? clientErr.message : String(clientErr),
+        });
+
+        let rollbackFailed = false;
+        let rollbackErrorMsg = '';
+
+        if (previousSecretData && existing.secret_ref_name) {
+          try {
+            await this.secretManager.updateUpstreamSecret(
+              existing.slug,
+              existing.secret_ref_name,
+              previousSecretData,
+              existing.secret_ref_key || 'token'
+            );
+          } catch (rErr: unknown) {
+            rollbackFailed = true;
+            rollbackErrorMsg = rErr instanceof Error ? rErr.message : String(rErr);
+          }
+        } else if (newlyCreatedSecretName) {
+          try {
+            await this.secretManager.deleteUpstreamSecret(existing.slug, newlyCreatedSecretName);
+          } catch (rErr: unknown) {
+            rollbackFailed = true;
+            rollbackErrorMsg = rErr instanceof Error ? rErr.message : String(rErr);
+          }
+        }
+
+        // Rollback SQLite row to previous working configuration
+        this.upstreamRepo.updateUpstream(existing.slug, {
+          displayName: existing.display_name,
+          endpointUrl: existing.endpoint_url,
+          timeoutMs: existing.timeout_ms,
+          secretRefName: existing.secret_ref_name,
+          secretRefKey: existing.secret_ref_key,
+          status: rollbackFailed ? 'cleanup_required' : existing.status,
+          cleanupError: rollbackFailed ? `Rotation partially failed: client update failed and Secret rollback failed: ${rollbackErrorMsg}` : null,
+        });
+
+        // Re-sync runtime client with previous working row
+        await this.upstreamManager.updateClient(existing).catch(() => {});
+
+        throw new AdminDependencyError(
+          `Failed to apply updated configuration to runtime upstream client: ${clientErr instanceof Error ? clientErr.message : String(clientErr)}. ${rollbackFailed ? 'Secret rollback also failed; marked for reconciliation.' : 'Previous configuration and Secret restored.'}`
+        );
+      }
 
       const finalizeResult = this.auditService.finalizeAdminAudit(auditId, {
         status: 'success',
@@ -779,19 +884,28 @@ export class AdminService {
         continue;
       }
 
-      try {
-        if (row.secret_ref_name) {
-          await this.secretManager.deleteUpstreamSecret(row.slug, row.secret_ref_name);
+      // If the row was in deleting state or was pending delete cleanup, finalize deletion
+      if (row.status === 'deleting' || (row.status === 'cleanup_required' && !row.cleanup_error?.includes('Rotation'))) {
+        try {
+          if (row.secret_ref_name) {
+            await this.secretManager.deleteUpstreamSecret(row.slug, row.secret_ref_name);
+          }
+          this.upstreamRepo.deleteUpstream(row.id);
+          cleanupRequiredReconciled++;
+          logger.info('Reconciled and finalized deletion for cleanup_required upstream', {
+            slug: row.slug,
+          });
+        } catch (err: unknown) {
+          logger.warn('Cleanup required reconciliation attempt failed; retaining record for operator', {
+            slug: row.slug,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
-        this.upstreamRepo.deleteUpstream(row.id);
-        cleanupRequiredReconciled++;
-        logger.info('Reconciled and finalized deletion for cleanup_required upstream', {
+      } else {
+        // Rotation mismatch requiring operator intervention
+        logger.warn('Upstream in cleanup_required due to credential rotation failure; retaining record for operator intervention', {
           slug: row.slug,
-        });
-      } catch (err: unknown) {
-        logger.warn('Cleanup required reconciliation attempt failed; retaining record for operator', {
-          slug: row.slug,
-          error: err instanceof Error ? err.message : String(err),
+          cleanupError: row.cleanup_error,
         });
       }
     }

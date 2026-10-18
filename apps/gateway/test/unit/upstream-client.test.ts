@@ -157,4 +157,162 @@ describe('Gateway Managed Upstream Client Unit Tests', () => {
 
     await client.close();
   });
+
+  describe('Explicit credential selection and authentication contract', () => {
+    it('fails closed when configured secretRefKey is missing and does not fall back to token or apiKey', async () => {
+      const client = new ManagedUpstreamClient({
+        slug: 'auth-fail-mcp',
+        endpointUrl: 'http://127.0.0.1:3000/mcp',
+        timeoutMs: 2000,
+        isEnabled: true,
+        allowLocalhostForTesting: true,
+        secretRefName: 'upstream-sec-auth-fail',
+        secretRefKey: 'custom-api-key',
+        credentialsResolver: async () => ({
+          token: 'silent-fallback-token',
+          apiKey: 'silent-fallback-key',
+        }),
+      });
+
+      await assert.rejects(
+        async () => client.ensureConnected(),
+        (err: unknown) => {
+          assert(err instanceof UpstreamConnectionError);
+          assert.match(
+            err.message,
+            /requires credential key 'custom-api-key' in Kubernetes Secret 'upstream-sec-auth-fail', but it was not found or is empty/
+          );
+          return true;
+        }
+      );
+
+      await client.close();
+    });
+
+    it('fails closed when multi-key contract is only partially satisfied', async () => {
+      const client = new ManagedUpstreamClient({
+        slug: 'multi-auth-mcp',
+        endpointUrl: 'http://127.0.0.1:3000/mcp',
+        timeoutMs: 2000,
+        isEnabled: true,
+        allowLocalhostForTesting: true,
+        secretRefName: 'upstream-sec-multi',
+        secretRefKey: 'x-tenant-id, x-token-id',
+        credentialsResolver: async () => ({
+          'x-tenant-id': 'tenant-42',
+        }),
+      });
+
+      await assert.rejects(
+        async () => client.ensureConnected(),
+        (err: unknown) => {
+          assert(err instanceof UpstreamConnectionError);
+          assert.match(
+            err.message,
+            /requires credential key 'x-token-id' in Kubernetes Secret 'upstream-sec-multi', but it was not found or is empty/
+          );
+          return true;
+        }
+      );
+
+      await client.close();
+    });
+
+    it('fails closed when credential value contains CRLF injection characters', async () => {
+      const client = new ManagedUpstreamClient({
+        slug: 'crlf-mcp',
+        endpointUrl: 'http://127.0.0.1:3000/mcp',
+        timeoutMs: 2000,
+        isEnabled: true,
+        allowLocalhostForTesting: true,
+        secretRefName: 'upstream-sec-crlf',
+        secretRefKey: 'token',
+        credentialsResolver: async () => ({
+          token: 'secret-token\r\nInjected-Header: evil',
+        }),
+      });
+
+      await assert.rejects(
+        async () => client.ensureConnected(),
+        (err: unknown) => {
+          assert(err instanceof UpstreamConnectionError);
+          assert.match(err.message, /contains illegal CRLF characters/);
+          return true;
+        }
+      );
+
+      await client.close();
+    });
+
+    it('fails closed when credential key is not a valid HTTP header token and has no mapped scheme', async () => {
+      const client = new ManagedUpstreamClient({
+        slug: 'bad-key-mcp',
+        endpointUrl: 'http://127.0.0.1:3000/mcp',
+        timeoutMs: 2000,
+        isEnabled: true,
+        allowLocalhostForTesting: true,
+        secretRefName: 'upstream-sec-bad-key',
+        secretRefKey: 'invalid key with spaces',
+        credentialsResolver: async () => ({
+          'invalid key with spaces': 'some-value',
+        }),
+      });
+
+      await assert.rejects(
+        async () => client.ensureConnected(),
+        (err: unknown) => {
+          assert(err instanceof UpstreamConnectionError);
+          assert.match(err.message, /is not a valid HTTP header token/);
+          return true;
+        }
+      );
+
+      await client.close();
+    });
+
+    it('sends verified mapped headers for token, x-api-key, and RFC 7230 header tokens', async () => {
+      let capturedHeaders: http.IncomingHttpHeaders = {};
+
+      const app = express();
+      app.use(express.json());
+      app.post('/mcp', async (req, res) => {
+        capturedHeaders = req.headers;
+        const mcpServer = new McpServer({ name: 'auth-test-server', version: '1.0.0' });
+        mcpServer.registerTool('ping', { description: 'ping' }, async () => ({
+          content: [{ type: 'text', text: 'pong' }],
+        }));
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        await mcpServer.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      });
+
+      const server = http.createServer(app);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+      const port = (server.address() as any).port;
+
+      const client = new ManagedUpstreamClient({
+        slug: 'mapped-headers-mcp',
+        endpointUrl: `http://127.0.0.1:${port}/mcp`,
+        timeoutMs: 5000,
+        isEnabled: true,
+        allowLocalhostForTesting: true,
+        secretRefName: 'upstream-sec-mapped',
+        secretRefKey: 'token, api-key, X-Custom-Tenant',
+        credentialsResolver: async () => ({
+          token: 'bearer-token-123',
+          'api-key': 'api-key-456',
+          'X-Custom-Tenant': 'tenant-789',
+        }),
+      });
+
+      await client.discoverTools();
+
+      assert.equal(capturedHeaders['authorization'], 'Bearer bearer-token-123');
+      assert.equal(capturedHeaders['x-api-key'], 'api-key-456');
+      assert.equal(capturedHeaders['x-custom-tenant'], 'tenant-789');
+
+      await client.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+  });
 });

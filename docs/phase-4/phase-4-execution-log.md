@@ -502,8 +502,61 @@
   - Zero live WooCommerce store records modified (baseline products 10, 11, 12 and Order #14 remain strictly untouched).
   - Defined exact Kubernetes RBAC requirements for G8 (`Role` in namespace `urumi-gateway-secrets` with apiGroups `[""]`, resources `["secrets"]`, verbs `["get", "list", "create", "update", "delete"]`).
 
+---
 
+### Gate G7 Technical Head Review Blocker Remediation & Verification
 
+Following independent verification of the codebase against Technical Head review feedback, three critical security and resilience blockers were confirmed and resolved in a focused remediation commit:
 
+1. **Kubernetes API Transport Security (`src/k8s/secret-client.ts`, `src/config.ts`):**
+   - **Verification Finding:** `DirectKubernetesSecretClient` previously accepted `http://` URLs and conditionally routed requests through `http.request`. If misconfigured with plain HTTP, ServiceAccount bearer tokens would transmit in plaintext across the network. Furthermore, `insecureSkipTlsVerify: true` was not restricted by environment.
+   - **Remediation Implemented:**
+     - `ConfigSchema.KUBERNETES_API_URL`: Enforced `url.startsWith('https://')` and verified URL contains no embedded userinfo credentials (`username`/`password`).
+     - `DirectKubernetesSecretClient`: Validated `apiUrl` using WHATWG `new URL()`. Enforced `protocol === 'https:'`. Strictly prohibited embedded credentials, query parameters, hash fragments, and link-local cloud metadata endpoints (`169.254.169.254`, `metadata.google.internal`).
+     - Hardened Production Lock: Strictly throws `KubernetesApiError` if `insecureSkipTlsVerify` is enabled when `NODE_ENV === 'production'`.
+     - Completely removed Node.js `http` module dependency from `secret-client.ts`; all requests are routed exclusively through native Node.js `https.request`.
 
+2. **Explicit Credential Selection & Authentication Contract (`src/upstream/upstream-client.ts`):**
+   - **Verification Finding:** `ensureConnected()` previously fell back to `token` or `apiKey` fields if the configured `secretRefKey` was absent, and dumped arbitrary credential keys as HTTP request headers. This violated explicit contract definitions and could leak unintended secrets or headers.
+   - **Remediation Implemented:**
+     - Explicit Per-Upstream Authentication Contract: Parsed `secretRefKey` into required key tokens (default `token`). Every configured key must exist in `secretData` and have non-empty string content.
+     - Strict Fail-Closed Guarantee: If any required key is missing or empty, `ManagedUpstreamClient` throws `UpstreamConnectionError` immediately. Silent fallback to `token` or `apiKey` was completely eliminated.
+     - CRLF Injection Defense: Validates all credential values against `/[\r\n]/` to prevent HTTP response/header splitting vulnerabilities.
+     - Validated Header Mapping: Key tokens `token`/`bearer` map to `Authorization: Bearer <val>`, `api-key`/`apikey`/`x-api-key` map to `X-API-Key: <val>`, and valid RFC 7230 header tokens map directly (`headers[reqKey] = val`). Any credential key that is not a valid RFC 7230 token throws `UpstreamConnectionError`.
 
+3. **Recoverable Credential Rotation Workflow (`src/admin/admin-service.ts`):**
+   - **Verification Finding:** `updateUpstream()` mutated the Kubernetes Secret before updating SQLite and the live runtime client. If SQLite threw an error or `upstreamManager.updateClient()` failed, the Secret remained modified while SQLite and runtime retained the old state.
+   - **Remediation Implemented:**
+     - Snapshot Capture: Prior to mutating Kubernetes, `updateUpstream()` captures `previousSecretData` from the existing Secret.
+     - Saga Compensation Rollback (Database Failure): If the SQLite write fails after Secret mutation, the Secret is immediately rolled back to `previousSecretData` using `secretManager.updateUpstreamSecret()`.
+     - Saga Compensation Rollback (Runtime Client Failure): If `upstreamManager.updateClient()` fails after Secret and SQLite mutations, both the Kubernetes Secret (restored to `previousSecretData`) and the SQLite row (restored to existing working fields) are rolled back, and the client is re-synchronized.
+     - Non-Fatal Recovery State (`cleanup_required`): If Secret rollback itself fails during error recovery, the upstream record is preserved in SQLite with `status: 'cleanup_required'` and `cleanup_error: 'Rotation partially failed: ...'`.
+     - Startup Reconciliation Safety: `runStartupReconciliation()` explicitly protects rotation-failed records with `cleanup_error?.includes('Rotation')` from accidental orphan deletion, retaining them for operator inspection and retry.
+
+#### Regression Test Evidence
+
+- **Unit Regression Tests Added:**
+  - `apps/gateway/test/unit/secret-manager.test.ts`:
+    - `DirectKubernetesSecretClient rejects plain HTTP, userinfo, metadata, and production insecureSkipTlsVerify` (enforces HTTPS, rejects embedded userinfo, rejects `169.254.169.254`, rejects query parameters, prohibits `insecureSkipTlsVerify` in production).
+  - `apps/gateway/test/unit/upstream-client.test.ts`:
+    - `fails closed when configured secretRefKey is missing and does not fall back to token or apiKey`
+    - `fails closed when multi-key contract is only partially satisfied`
+    - `fails closed when credential value contains CRLF injection characters`
+    - `fails closed when credential key is not a valid HTTP header token and has no mapped scheme`
+    - `sends verified mapped headers for token, x-api-key, and RFC 7230 header tokens`
+  - `apps/gateway/test/unit/admin-service.test.ts`:
+    - `updateUpstream rolls back Kubernetes Secret to previous data if SQLite update fails`
+    - `updateUpstream rolls back Kubernetes Secret and SQLite row if runtime client update fails`
+    - `updateUpstream transitions to cleanup_required if Secret rollback fails during recovery`
+    - `startup reconciliation protects rotation-failed cleanup_required records from accidental deletion`
+
+- **Full Verification Results:**
+  - **Gateway Unit Suite (`npm --workspace=gateway run test:unit`):** **208 passed, 0 failed across 27 suites**
+  - **Gateway Protocol Suite (`npm --workspace=gateway run test:protocol`):** **10 passed, 0 failed across 6 suites**
+  - **Monorepo Build (`npm run build`):** Clean compilation across all 5 workspaces with 0 errors
+  - **Monorepo Lint (`npm run lint`):** 0 lint errors
+  - **Monorepo Test Suite (`npm test`):** **360 passed, 0 failed across 4 workspaces**
+    - `apps/gateway`: 218 passed (208 unit, 10 protocol)
+    - `apps/woocommerce-mcp`: 81 passed (46 unit, 35 protocol)
+    - `apps/mcp-tasks`: 35 passed (27 unit, 8 protocol)
+    - `apps/mcp-crm`: 26 passed (20 unit, 6 protocol)

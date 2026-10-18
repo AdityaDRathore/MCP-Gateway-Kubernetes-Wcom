@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import http from 'node:http';
 import https from 'node:https';
 import { URL } from 'node:url';
 import { logger } from '../logging/logger.js';
@@ -101,31 +100,93 @@ export class DirectKubernetesSecretClient implements IKubernetesSecretClient {
     const envPort = process.env.KUBERNETES_SERVICE_PORT;
     const defaultHost = envHost && envPort ? `https://${envHost}:${envPort}` : 'https://kubernetes.default.svc';
 
-    this.apiUrl = (options.apiUrl || defaultHost).replace(/\/+$/, '');
+    const rawUrl = (options.apiUrl || defaultHost).replace(/\/+$/, '');
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      throw new KubernetesApiError(
+        `Invalid Kubernetes API URL: "${rawUrl}"`,
+        500,
+        'SecurityConfigurationError'
+      );
+    }
+
+    // 1. Enforce HTTPS protocol
+    if (parsed.protocol !== 'https:') {
+      throw new KubernetesApiError(
+        `Kubernetes API URL must use HTTPS protocol: received "${rawUrl}"`,
+        500,
+        'SecurityConfigurationError'
+      );
+    }
+
+    // 2. Reject embedded userinfo credentials
+    if (parsed.username || parsed.password) {
+      throw new KubernetesApiError(
+        'Kubernetes API URL must not contain embedded userinfo credentials',
+        500,
+        'SecurityConfigurationError'
+      );
+    }
+
+    // 3. Reject unexpected query parameters or fragments
+    if (parsed.search || parsed.hash) {
+      throw new KubernetesApiError(
+        'Kubernetes API URL must not contain query parameters or fragments',
+        500,
+        'SecurityConfigurationError'
+      );
+    }
+
+    // 4. Reject prohibited destinations (e.g. cloud metadata services)
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      hostname === '169.254.169.254' ||
+      hostname === 'metadata.google.internal' ||
+      hostname.endsWith('.google.internal') ||
+      hostname === 'instance-data'
+    ) {
+      throw new KubernetesApiError(
+        `Kubernetes API URL destination "${hostname}" is prohibited`,
+        500,
+        'SecurityConfigurationError'
+      );
+    }
+
+    // 5. Never allow TLS verification to be disabled in production
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (options.insecureSkipTlsVerify && isProduction) {
+      throw new KubernetesApiError(
+        'insecureSkipTlsVerify is strictly prohibited in production mode',
+        500,
+        'SecurityConfigurationError'
+      );
+    }
+
+    this.apiUrl = rawUrl;
     this.tokenPath = options.tokenPath || '/var/run/secrets/kubernetes.io/serviceaccount/token';
     this.caCertPath = options.caCertPath || '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt';
-    this.insecureSkipTlsVerify = Boolean(options.insecureSkipTlsVerify);
+    this.insecureSkipTlsVerify = isProduction ? false : Boolean(options.insecureSkipTlsVerify);
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10000;
     this.explicitToken = options.token;
 
-    if (this.apiUrl.startsWith('https://')) {
-      let ca: Buffer | undefined;
-      if (fs.existsSync(this.caCertPath)) {
-        try {
-          ca = fs.readFileSync(this.caCertPath);
-        } catch (err: unknown) {
-          logger.warn('Could not read Kubernetes CA certificate; falling back to system CAs', {
-            caCertPath: this.caCertPath,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+    let ca: Buffer | undefined;
+    if (fs.existsSync(this.caCertPath)) {
+      try {
+        ca = fs.readFileSync(this.caCertPath);
+      } catch (err: unknown) {
+        logger.warn('Could not read Kubernetes CA certificate; falling back to system CAs', {
+          caCertPath: this.caCertPath,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-      this.httpsAgent = new https.Agent({
-        ca,
-        rejectUnauthorized: !this.insecureSkipTlsVerify,
-        keepAlive: true,
-      });
     }
+    this.httpsAgent = new https.Agent({
+      ca,
+      rejectUnauthorized: !this.insecureSkipTlsVerify,
+      keepAlive: true,
+    });
   }
 
   private getToken(): string {
@@ -163,7 +224,6 @@ export class DirectKubernetesSecretClient implements IKubernetesSecretClient {
   ): Promise<{ status: number; body: any }> {
     const token = this.getToken();
     const parsedUrl = new URL(`${this.apiUrl}${path}`);
-    const isHttps = parsedUrl.protocol === 'https:';
 
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
@@ -178,20 +238,18 @@ export class DirectKubernetesSecretClient implements IKubernetesSecretClient {
     }
 
     const requestOptions: https.RequestOptions = {
-      protocol: parsedUrl.protocol,
+      protocol: 'https:',
       hostname: parsedUrl.hostname,
-      port: parsedUrl.port || (isHttps ? 443 : 80),
+      port: parsedUrl.port || 443,
       path: `${parsedUrl.pathname}${parsedUrl.search}`,
       method,
       headers,
-      agent: isHttps ? this.httpsAgent : undefined,
+      agent: this.httpsAgent,
       timeout: this.requestTimeoutMs,
     };
 
-    const clientModule = isHttps ? https : http;
-
     return new Promise<{ status: number; body: any }>((resolve, reject) => {
-      const req = clientModule.request(requestOptions, (res) => {
+      const req = https.request(requestOptions, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('end', () => {

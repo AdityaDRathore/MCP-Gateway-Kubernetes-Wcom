@@ -566,4 +566,208 @@ describe('Gate G7: AdminService Saga Lifecycle & Coordination Unit Tests', () =>
     assert.equal(res.status, 'active');
     assert.equal(res.auditDegraded, true);
   });
+
+  describe('Credential rotation transition failures and rollback recovery', () => {
+    test('updateUpstream rolls back Kubernetes Secret to previous data if SQLite update fails', async () => {
+      const row = upstreamRepo.insertUpstream({
+        slug: 'rot-fail-db',
+        displayName: 'DB Fail Service',
+        endpointUrl: 'http://urumi-woocommerce-mcp.urumi.svc.cluster.local:3000/mcp',
+        timeoutMs: 5000,
+        status: 'active',
+        isEnabled: 1,
+        secretRefName: 'upstream-sec-rot-fail-db',
+      });
+
+      await mockK8sClient.createSecret('urumi-gateway-secrets', {
+        name: row.secret_ref_name!,
+        namespace: 'urumi-gateway-secrets',
+        labels: {
+          'app.kubernetes.io/managed-by': 'urumi-gateway',
+          'urumi.io/upstream-slug': 'rot-fail-db',
+        },
+        stringData: { token: 'initial-db-token' },
+      });
+
+      // Force SQLite update to fail
+      const originalUpdate = upstreamRepo.updateUpstream.bind(upstreamRepo);
+      let callCount = 0;
+      upstreamRepo.updateUpstream = (slug, updates) => {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('SQLite disk I/O write error during rotation');
+        }
+        return originalUpdate(slug, updates);
+      };
+
+      await assert.rejects(
+        async () => {
+          await adminService.updateUpstream(
+            'rot-fail-db',
+            {
+              credential: 'new-uncommitted-token',
+            },
+            adminActor
+          );
+        },
+        (err: Error) => {
+          assert.ok(err instanceof AdminDependencyError);
+          assert.match(err.message, /Failed to update upstream configuration in database/);
+          assert.match(err.message, /Secret state successfully rolled back/);
+          return true;
+        }
+      );
+
+      // Verify Secret was rolled back to initial token
+      const secret = mockK8sClient.getRawStoredSecret('urumi-gateway-secrets', row.secret_ref_name!);
+      assert.equal(secret?.data['token'], 'initial-db-token');
+
+      // Verify lock released
+      assert.equal(adminService.getActiveLocks().has('rot-fail-db'), false);
+    });
+
+    test('updateUpstream rolls back Kubernetes Secret and SQLite row if runtime client update fails', async () => {
+      const row = upstreamRepo.insertUpstream({
+        slug: 'rot-fail-client',
+        displayName: 'Client Fail Service Original',
+        endpointUrl: 'http://urumi-woocommerce-mcp.urumi.svc.cluster.local:3000/mcp',
+        timeoutMs: 5000,
+        status: 'active',
+        isEnabled: 1,
+        secretRefName: 'upstream-sec-rot-fail-client',
+      });
+
+      await mockK8sClient.createSecret('urumi-gateway-secrets', {
+        name: row.secret_ref_name!,
+        namespace: 'urumi-gateway-secrets',
+        labels: {
+          'app.kubernetes.io/managed-by': 'urumi-gateway',
+          'urumi.io/upstream-slug': 'rot-fail-client',
+        },
+        stringData: { token: 'initial-client-token' },
+      });
+
+      // Force runtime client update to fail
+      upstreamManager.updateClient = async () => {
+        throw new Error('Upstream MCP endpoint connection refused after rotation');
+      };
+
+      await assert.rejects(
+        async () => {
+          await adminService.updateUpstream(
+            'rot-fail-client',
+            {
+              displayName: 'Updated Name That Should Rollback',
+              credential: 'new-client-token',
+            },
+            adminActor
+          );
+        },
+        (err: Error) => {
+          assert.ok(err instanceof AdminDependencyError);
+          assert.match(err.message, /Failed to apply updated configuration to runtime upstream client/);
+          assert.match(err.message, /Previous configuration and Secret restored/);
+          return true;
+        }
+      );
+
+      // Verify Secret was rolled back
+      const secret = mockK8sClient.getRawStoredSecret('urumi-gateway-secrets', row.secret_ref_name!);
+      assert.equal(secret?.data['token'], 'initial-client-token');
+
+      // Verify SQLite row was restored to original values
+      const restoredRow = upstreamRepo.getUpstreamBySlug('rot-fail-client');
+      assert.ok(restoredRow);
+      assert.equal(restoredRow.display_name, 'Client Fail Service Original');
+      assert.equal(restoredRow.status, 'active');
+
+      // Verify lock released
+      assert.equal(adminService.getActiveLocks().has('rot-fail-client'), false);
+    });
+
+    test('updateUpstream transitions to cleanup_required if Secret rollback fails during recovery', async () => {
+      const row = upstreamRepo.insertUpstream({
+        slug: 'rot-fail-double',
+        displayName: 'Double Fail Service',
+        endpointUrl: 'http://urumi-woocommerce-mcp.urumi.svc.cluster.local:3000/mcp',
+        timeoutMs: 5000,
+        status: 'active',
+        isEnabled: 1,
+        secretRefName: 'upstream-sec-rot-fail-double',
+      });
+
+      await mockK8sClient.createSecret('urumi-gateway-secrets', {
+        name: row.secret_ref_name!,
+        namespace: 'urumi-gateway-secrets',
+        labels: {
+          'app.kubernetes.io/managed-by': 'urumi-gateway',
+          'urumi.io/upstream-slug': 'rot-fail-double',
+        },
+        stringData: { token: 'initial-double-token' },
+      });
+
+      // Fail client update
+      upstreamManager.updateClient = async () => {
+        throw new Error('MCP endpoint refused connection');
+      };
+
+      // Fail Secret update on second call (which is the rollback attempt)
+      let updateCalls = 0;
+      const originalK8sUpdate = mockK8sClient.updateSecret.bind(mockK8sClient);
+      mockK8sClient.updateSecret = async (ns, name, updates) => {
+        updateCalls++;
+        if (updateCalls === 2) {
+          throw new Error('Kubernetes API partition during Secret rollback');
+        }
+        return originalK8sUpdate(ns, name, updates);
+      };
+
+      await assert.rejects(
+        async () => {
+          await adminService.updateUpstream(
+            'rot-fail-double',
+            {
+              credential: 'failed-double-token',
+            },
+            adminActor
+          );
+        },
+        (err: Error) => {
+          assert.ok(err instanceof AdminDependencyError);
+          assert.match(err.message, /Secret rollback also failed; marked for reconciliation/);
+          return true;
+        }
+      );
+
+      // Verify SQLite row transitioned to cleanup_required with rotation error
+      const cleanupRow = upstreamRepo.getUpstreamBySlug('rot-fail-double');
+      assert.ok(cleanupRow);
+      assert.equal(cleanupRow.status, 'cleanup_required');
+      assert.match(cleanupRow.cleanup_error!, /Rotation partially failed/);
+
+      // Verify lock released
+      assert.equal(adminService.getActiveLocks().has('rot-fail-double'), false);
+    });
+
+    test('startup reconciliation protects rotation-failed cleanup_required records from accidental deletion', async () => {
+      upstreamRepo.insertUpstream({
+        slug: 'rotation-mismatch',
+        displayName: 'Rotation Mismatch Service',
+        endpointUrl: 'http://urumi-woocommerce-mcp.urumi.svc.cluster.local:3000/mcp',
+        timeoutMs: 5000,
+        status: 'cleanup_required',
+        isEnabled: 1,
+        secretRefName: 'upstream-sec-rotation-mismatch',
+        cleanupError: 'Rotation partially failed: client update failed and Secret rollback failed: K8s API down',
+      });
+
+      const report = await adminService.runStartupReconciliation();
+      assert.equal(report.cleanupRequiredReconciled, 0);
+
+      // Record must NOT have been deleted
+      const surviving = upstreamRepo.getUpstreamBySlug('rotation-mismatch');
+      assert.ok(surviving);
+      assert.equal(surviving.status, 'cleanup_required');
+    });
+  });
 });

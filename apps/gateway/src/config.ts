@@ -48,7 +48,23 @@ export const ConfigSchema = z.object({
       'KUBERNETES_SECRETS_NAMESPACE cannot target core workload or cluster system namespaces (urumi, default, kube-system, kube-public, kube-node-lease)'
     )
     .default('urumi-gateway-secrets'),
-  KUBERNETES_API_URL: z.string().url('KUBERNETES_API_URL must be a valid URL').optional(),
+  KUBERNETES_API_URL: z.string().url('KUBERNETES_API_URL must be a valid URL')
+    .refine(
+      (url) => url.startsWith('https://'),
+      'KUBERNETES_API_URL must use the HTTPS protocol'
+    )
+    .refine(
+      (url) => {
+        try {
+          const parsed = new URL(url);
+          return !parsed.username && !parsed.password;
+        } catch {
+          return false;
+        }
+      },
+      'KUBERNETES_API_URL must not contain embedded userinfo credentials'
+    )
+    .optional(),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
