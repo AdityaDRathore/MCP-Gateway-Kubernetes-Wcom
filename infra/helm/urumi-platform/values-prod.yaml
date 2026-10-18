@@ -39,9 +39,14 @@ store:
 gateway:
   domain: "app.urumi-demo.com"
   port: 443
+  image: "urumi-gateway:1.0.0"
+  digest: ""
+  imagePullPolicy: "IfNotPresent"
   # Single replica is strictly required when using SQLite on ReadWriteOnce PVC (/data/gateway.db)
   # to prevent database locking and multi-writer corruption.
   replicas: 1
+  k8sApiClusterIp: "10.43.0.1/32"
+  k8sControlPlaneCidr: "172.19.0.0/16"
   resources:
     requests:
       cpu: "100m"
@@ -66,6 +71,9 @@ upstreams:
         cpu: "250m"
         memory: "192Mi"
   crm:
+    image: "mcp-crm:1.0.0"
+    digest: ""
+    imagePullPolicy: "IfNotPresent"
     resources:
       requests:
         cpu: "50m"
@@ -74,6 +82,9 @@ upstreams:
         cpu: "200m"
         memory: "128Mi"
   tasks:
+    image: "mcp-tasks:1.0.0"
+    digest: ""
+    imagePullPolicy: "IfNotPresent"
     resources:
       requests:
         cpu: "50m"
@@ -85,4 +96,3 @@ upstreams:
 networkPolicy:
   enabled: true
   allowTestClient: false
-

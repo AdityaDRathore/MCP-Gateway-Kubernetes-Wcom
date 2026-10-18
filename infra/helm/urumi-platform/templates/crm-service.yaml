@@ -1,0 +1,20 @@
+{{- if .Values.upstreams.crm.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: urumi-mcp-crm
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-crm
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.upstreams.crm.service.port | default 3000 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: mcp-crm
+{{- end }}

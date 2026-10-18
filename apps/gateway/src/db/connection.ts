@@ -107,15 +107,29 @@ export class DatabaseManager {
         if (!fs.existsSync(dir)) {
           fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
         }
-        // Tighten existing directory permissions to 0700
-        fs.chmodSync(dir, 0o700);
+        // Tighten existing directory permissions to 0700 if permitted (e.g. non-mountpoint)
+        try {
+          fs.chmodSync(dir, 0o700);
+        } catch (err: unknown) {
+          logger.warn('Could not tighten permissions on database directory', {
+            dir,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
       this.db = new DatabaseSync(this.dbPath);
 
-      // Enforce 0600 file permissions on database file
+      // Enforce 0600 file permissions on database file if permitted
       if (this.dbPath !== ':memory:' && fs.existsSync(this.dbPath)) {
-        fs.chmodSync(this.dbPath, 0o600);
+        try {
+          fs.chmodSync(this.dbPath, 0o600);
+        } catch (err: unknown) {
+          logger.warn('Could not tighten permissions on database file', {
+            dbPath: this.dbPath,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     } catch (err: unknown) {
       throw new DatabaseInitializationError(

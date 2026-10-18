@@ -2,6 +2,79 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: urumi-gateway-netpol
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # 1. Allow public MCP traffic routed through Traefik ingress controller in kube-system
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.service.port | default 3000 }}
+    {{- if .Values.networkPolicy.allowTestClient }}
+    # 2. Explicitly local-only exception for development verification
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test-client
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.service.port | default 3000 }}
+    {{- end }}
+  egress:
+    # 1. Allow CoreDNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 2. Allow egress strictly to approved upstream MCP services on port 3000
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - mcp-woocommerce
+                  - mcp-crm
+                  - mcp-tasks
+      ports:
+        - protocol: TCP
+          port: 3000
+    # 3. Allow egress to Kubernetes API server for dynamic Secret lifecycle
+    # Accounts for pre-DNAT ClusterIP (10.43.0.1:443) and post-DNAT node endpoint (:6443)
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.gateway.k8sApiClusterIp | default "10.43.0.1/32" }}
+        - ipBlock:
+            cidr: {{ .Values.gateway.k8sControlPlaneCidr | default "172.19.0.0/16" }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: urumi-woocommerce-mcp-netpol
   labels:
     {{- include "urumi-platform.labels" . | nindent 4 }}
@@ -20,6 +93,8 @@ spec:
     - from:
         - podSelector:
             matchLabels:
+              app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: gateway
         {{- if .Values.networkPolicy.allowTestClient }}
         # Explicitly local-only exception for development verification
@@ -42,6 +117,90 @@ spec:
         - protocol: TCP
           port: 80
     # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: urumi-mcp-crm-netpol
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-crm
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mcp-crm
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow incoming MCP traffic only from intended gateway workloads
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: gateway
+        {{- if .Values.networkPolicy.allowTestClient }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test-client
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.upstreams.crm.service.port | default 3000 }}
+  egress:
+    # DNS resolution only (zero external or database egress)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: urumi-mcp-tasks-netpol
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-tasks
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mcp-tasks
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow incoming MCP traffic only from intended gateway workloads
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: gateway
+        {{- if .Values.networkPolicy.allowTestClient }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test-client
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.upstreams.tasks.service.port | default 3000 }}
+  egress:
+    # DNS resolution only (zero external or database egress)
     - to:
         - namespaceSelector: {}
       ports:

@@ -48,8 +48,17 @@ gateway:
   enabled: true
   domain: "dashboard.127.0.0.1.nip.io"
   port: 8080
-  image: "urumi-gateway:latest"
+  image: "urumi-gateway:1.0.0"
+  digest: ""
+  imagePullPolicy: "IfNotPresent"
   replicas: 1
+  service:
+    port: 3000
+  serviceAccount:
+    name: "urumi-gateway-sa"
+  secretsNamespace: "urumi-gateway-secrets"
+  k8sApiClusterIp: "10.43.0.1/32"
+  k8sControlPlaneCidr: "172.19.0.0/16"
   resources:
     requests:
       cpu: "50m"
@@ -61,6 +70,11 @@ gateway:
     enabled: true
     size: "500Mi"
     storageClass: "local-path"
+  ingress:
+    enabled: true
+  env:
+    NODE_ENV: "production"
+    LOG_LEVEL: "info"
 
 upstreams:
   woocommerce:
@@ -100,7 +114,12 @@ upstreams:
     secretName: "urumi-woocommerce-api"
   crm:
     enabled: true
-    image: "mcp-crm:latest"
+    image: "mcp-crm:1.0.0"
+    digest: ""
+    imagePullPolicy: "IfNotPresent"
+    replicas: 1
+    service:
+      port: 3000
     resources:
       requests:
         cpu: "50m"
@@ -110,7 +129,12 @@ upstreams:
         memory: "128Mi"
   tasks:
     enabled: true
-    image: "mcp-tasks:latest"
+    image: "mcp-tasks:1.0.0"
+    digest: ""
+    imagePullPolicy: "IfNotPresent"
+    replicas: 1
+    service:
+      port: 3000
     resources:
       requests:
         cpu: "50m"
@@ -122,4 +146,3 @@ upstreams:
 networkPolicy:
   enabled: true
   allowTestClient: false
-

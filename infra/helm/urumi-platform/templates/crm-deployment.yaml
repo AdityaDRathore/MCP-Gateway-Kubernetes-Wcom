@@ -1,0 +1,90 @@
+{{- if .Values.upstreams.crm.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: urumi-mcp-crm
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-crm
+spec:
+  replicas: {{ .Values.upstreams.crm.replicas | default 1 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mcp-crm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: mcp-crm
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-crm
+          image: {{ if .Values.upstreams.crm.digest }}{{ printf "%s@%s" .Values.upstreams.crm.image .Values.upstreams.crm.digest | quote }}{{ else }}{{ .Values.upstreams.crm.image | default "mcp-crm:1.0.0" | quote }}{{ end }}
+          imagePullPolicy: {{ .Values.upstreams.crm.imagePullPolicy | default "IfNotPresent" | quote }}
+          ports:
+            - containerPort: {{ .Values.upstreams.crm.service.port | default 3000 }}
+              name: http
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: {{ .Values.upstreams.crm.service.port | default 3000 | quote }}
+            - name: HOST
+              value: "0.0.0.0"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- if .Values.upstreams.crm.resources }}
+          resources:
+            {{- toYaml .Values.upstreams.crm.resources | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

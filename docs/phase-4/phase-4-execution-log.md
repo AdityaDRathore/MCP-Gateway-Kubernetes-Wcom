@@ -21,7 +21,7 @@
 | **G5** | Upstream Aggregation Manager & Dynamic Tool Catalog | **PASS** | Formally accepted & verified with G5-R1 remediation | 2026-10-17 |
 | **G6** | Gateway Router, Deadlines, Concurrency & Resilience | **PASS** | Implemented & verified with 100% test pass rate across unit and protocol suites | 2026-10-17 |
 | **G7** | Dynamic Admin API & Kubernetes Secret Lifecycle | **PASS** | Implemented & verified with 100% test pass rate across unit and protocol suites | 2026-10-18 |
-| **G8** | Docker, Helm Chart, PVC & NetworkPolicy Integration | PENDING | Awaiting G7 completion & review | — |
+| **G8** | Docker, Helm Chart, PVC & NetworkPolicy Integration | **PASS** | Deployed & verified in k3d; submitted for Technical Head review | 2026-10-18 |
 | **G9** | End-to-End Acceptance, Performance Benchmarking & Closure | PENDING | Awaiting G8 completion & review | — |
 
 ---
@@ -560,3 +560,85 @@ Following independent verification of the codebase against Technical Head review
     - `apps/woocommerce-mcp`: 81 passed (46 unit, 35 protocol)
     - `apps/mcp-tasks`: 35 passed (27 unit, 8 protocol)
     - `apps/mcp-crm`: 26 passed (20 unit, 6 protocol)
+
+---
+
+### 10. Gate G8: Docker, Helm, Kubernetes Integration, Persistent Storage, RBAC and Network Security
+- **Timestamp:** 2026-10-18T13:00:00Z
+- **Status:** **PASS (IMPLEMENTED AND FULLY VERIFIED IN K3D CLUSTER)**
+- **Governing Plan:** `phase-4-gate-g8-implementation-plan.md`
+
+#### Scope Implemented
+1. **Multi-Stage OCI Docker Images:**
+   - Authored `apps/gateway/Dockerfile`, `apps/mcp-crm/Dockerfile`, and `apps/mcp-tasks/Dockerfile`.
+   - Pinned base image: `node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1` (providing core `node:sqlite`).
+   - Hardened non-root execution: `USER mcpuser:mcpuser` (UID 10001, GID 10001) with clean multi-stage pruning (`npm ci --omit=dev`).
+   - Imported into local K3s containerd store (`k3d-urumi-server-0`).
+2. **Helm Platform Integration (`infra/helm/urumi-platform`):**
+   - Added `templates/secrets-namespace.yaml` for isolated namespace `urumi-gateway-secrets`.
+   - Added `templates/gateway-serviceaccount.yaml` and `templates/gateway-rbac.yaml` creating Role/RoleBinding strictly scoped to `urumi-gateway-secrets` with `get`, `list`, `create`, `update`, `delete` on `secrets`.
+   - Added `templates/gateway-pvc.yaml` (500Mi RWO `local-path`) with `fsGroup: 10001` and `strategy: Recreate` (enforcing single-writer SQLite invariant).
+   - Added `templates/gateway-deployment.yaml` and `templates/gateway-service.yaml` exposing port 3000 ClusterIP.
+   - Added `templates/crm-deployment.yaml`, `templates/crm-service.yaml`, `templates/tasks-deployment.yaml`, `templates/tasks-service.yaml`.
+   - Updated `templates/ingress.yaml`: Restricts public gateway ingress strictly to `/mcp` on `dashboard.127.0.0.1.nip.io:8080`. Admin routes (`/admin/v1/*`) and upstream services return 404 from ingress.
+   - Updated `templates/networkpolicy.yaml`:
+     - Applied ingress restrictions ensuring upstreams only receive traffic from gateway.
+     - Proved post-DNAT CNI behavior in K3s (Flannel + embedded `kube-router`): iptables DNAT rewrites `10.43.0.1:443` to control plane host `172.19.0.2:6443`. Implemented egress rules allowing both port 443 and port 6443 alongside DNS (53) and upstreams (3000), while strictly dropping egress to WordPress (80) and MariaDB (3306).
+   - Deployed cleanly to local cluster via Helm Revision 7.
+3. **Runtime SQLite Mount Fix (`apps/gateway/src/db/connection.ts`):**
+   - Wrapped directory/file `chmodSync` operations in try/catch to safely accommodate unprivileged non-root execution (`10001:10001`) on mounted PVC root without startup crash.
+
+#### Empirical Verification Results
+
+1. **Pod & Workload Health (All 6 Pods 1/1 Running):**
+   - `urumi-gateway`: 1/1 Running (`10.42.0.154`)
+   - `urumi-mcp-crm`: 1/1 Running (`10.42.0.150`)
+   - `urumi-mcp-tasks`: 1/1 Running (`10.42.0.151`)
+   - `urumi-woocommerce-mcp`: 1/1 Running (`10.42.0.142`)
+   - `urumi-wordpress`: 1/1 Running (`10.42.0.141`)
+   - `urumi-mariadb-0`: 1/1 Running (`10.42.0.140`)
+   - Gateway PVC: `urumi-gateway-pvc` Bound (500Mi)
+
+2. **Ingress & Perimeter Security:**
+   - Storefront (`GET shop.127.0.0.1.nip.io:8080/`): HTTP 200 OK
+   - Downstream MCP (`GET dashboard.127.0.0.1.nip.io:8080/mcp`): HTTP 405 Method Not Allowed (endpoint reachable, enforces POST)
+   - Admin API via Ingress (`GET dashboard.127.0.0.1.nip.io:8080/admin/v1/upstreams`): **HTTP 404 Not Found** (Private)
+   - Upstream MCP via Ingress (`GET dashboard.127.0.0.1.nip.io:8080/mcp-crm/`): **HTTP 404 Not Found** (Private)
+
+3. **Downstream MCP Protocol Execution:**
+   - `initialize` over `POST /mcp`: HTTP 200 with server info `urumi-gateway v1.0.0`
+   - `tools/list` over `POST /mcp`: HTTP 200 with all 10 tools from WooCommerce, CRM, and Tasks (`reachable: true`)
+   - `tools/call` for `crm__search_contacts`: HTTP 200 with synthetic contacts (`CRM-CONT-001`, `CRM-CONT-002`)
+   - `tools/call` for `woocommerce__get_order` (Order #14): HTTP 200 with order 14 data (`URUMI-MUG-001`, Total 299.00, PII redacted)
+
+4. **Persistence & Crash Recovery Across Pod Deletion:**
+   - SQLite state prior to pod deletion: `users: 1`, `apiKeys: 1`, `auditLogs: 2`, `upstreams: 3`
+   - Executed `kubectl delete pod -n urumi -l app.kubernetes.io/component=gateway`
+   - Replacement pod reached 1/1 Running.
+   - SQLite state after pod replacement: `users: 1`, `apiKeys: 1`, `auditLogs: 2`, `upstreams: 3` (Zero data loss, bootstrap key preserved)
+
+5. **NetworkPolicy Positive & Negative Paths:**
+   - Positive Egress:
+     - `http://urumi-mcp-crm:3000/health`: HTTP 200 OK
+     - `http://urumi-mcp-tasks:3000/health`: HTTP 200 OK
+     - `http://urumi-woocommerce-mcp:3000/health`: HTTP 200 OK
+     - `https://10.43.0.1:443/version` (Kubernetes API): HTTP 200 OK
+   - Negative Egress:
+     - `http://urumi-wordpress:80/`: **BLOCKED** (`TypeError: fetch failed`)
+     - `http://urumi-mariadb:3306/`: **BLOCKED** (`TypeError: fetch failed`)
+
+6. **Kubernetes RBAC Secret Isolation:**
+   - List `urumi-gateway-secrets`: **HTTP 200 OK**
+   - List `urumi` secrets: **HTTP 403 Forbidden**
+   - Create secret in `urumi-gateway-secrets`: **HTTP 201 Created**
+   - Create secret in `urumi`: **HTTP 403 Forbidden**
+   - Delete secret from `urumi-gateway-secrets`: **HTTP 200 OK**
+
+7. **Protected WooCommerce Invariant Verification:**
+   - Product 10: "Urumi Test Mug" (SKU: `URUMI-MUG-001`, Price: `299`, Status: `publish`) — **UNMUTATED**
+   - Product 11: "Wireless Mouse Demo" (SKU: `URUMI-MOUSE-001`, Price: `799`, Status: `publish`) — **UNMUTATED**
+   - Product 12: "Notebook Demo" (SKU: `URUMI-NOTE-001`, Price: `149`, Status: `publish`) — **UNMUTATED**
+   - Order #14: ID 14 (Status: `processing`, Total: `299.00`, Currency: `INR`) — **UNMUTATED**
+   - PVC UIDs:
+     - `urumi-mariadb-pvc`: `58d7357d-5671-476d-904a-cda0a12cf269` — **PRESERVED**
+     - `urumi-wordpress-pvc`: `78d0d23b-59fe-4c82-be1e-687d9c40fd6f` — **PRESERVED**

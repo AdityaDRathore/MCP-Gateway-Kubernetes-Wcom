@@ -36,7 +36,11 @@ store:
 gateway:
   domain: "dashboard.127.0.0.1.nip.io"
   port: 8080
+  image: "urumi-gateway:1.0.0"
+  imagePullPolicy: "IfNotPresent"
   replicas: 1
+  k8sApiClusterIp: "10.43.0.1/32"
+  k8sControlPlaneCidr: "172.19.0.0/16"
   resources:
     requests:
       cpu: "50m"
@@ -46,6 +50,7 @@ gateway:
       memory: "192Mi"
   persistence:
     storageClass: "local-path"
+    size: "500Mi"
 
 upstreams:
   woocommerce:
@@ -60,6 +65,9 @@ upstreams:
         cpu: "150m"
         memory: "128Mi"
   crm:
+    image: "mcp-crm:1.0.0"
+    digest: ""
+    imagePullPolicy: "IfNotPresent"
     resources:
       requests:
         cpu: "25m"
@@ -68,6 +76,9 @@ upstreams:
         cpu: "150m"
         memory: "128Mi"
   tasks:
+    image: "mcp-tasks:1.0.0"
+    digest: ""
+    imagePullPolicy: "IfNotPresent"
     resources:
       requests:
         cpu: "25m"
@@ -79,4 +90,3 @@ upstreams:
 networkPolicy:
   enabled: true
   allowTestClient: true
-

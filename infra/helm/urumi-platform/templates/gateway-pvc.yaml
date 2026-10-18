@@ -1,0 +1,16 @@
+{{- if and .Values.gateway.enabled .Values.gateway.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: urumi-gateway-pvc
+  labels:
+    {{- include "urumi-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.gateway.persistence.storageClass | default "local-path" | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.gateway.persistence.size | default "500Mi" | quote }}
+{{- end }}
