@@ -47,6 +47,7 @@ const authenticator = new DatabaseAuthenticator(apiKeyService);
 // Instantiate Kubernetes Secret Manager
 const secretClient = new DirectKubernetesSecretClient({
   apiUrl: config.KUBERNETES_API_URL,
+  allowLocalhostForTesting: config.NODE_ENV !== 'production',
 });
 const secretManager = new SecretManager(secretClient, {
   namespace: config.KUBERNETES_SECRETS_NAMESPACE,

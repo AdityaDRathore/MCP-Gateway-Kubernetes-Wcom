@@ -64,6 +64,33 @@ export const ConfigSchema = z.object({
       },
       'KUBERNETES_API_URL must not contain embedded userinfo credentials'
     )
+    .refine(
+      (url) => {
+        try {
+          const parsed = new URL(url);
+          const hostname = parsed.hostname.toLowerCase();
+          const allowedHosts = new Set([
+            'kubernetes.default.svc',
+            'kubernetes.default.svc.cluster.local',
+            'kubernetes.default',
+            'kubernetes',
+            '10.43.0.1',
+          ]);
+          if (process.env.KUBERNETES_SERVICE_HOST) {
+            allowedHosts.add(process.env.KUBERNETES_SERVICE_HOST.toLowerCase());
+          }
+          if (process.env.NODE_ENV !== 'production') {
+            allowedHosts.add('localhost');
+            allowedHosts.add('127.0.0.1');
+            allowedHosts.add('::1');
+          }
+          return allowedHosts.has(hostname);
+        } catch {
+          return false;
+        }
+      },
+      'KUBERNETES_API_URL destination must be an approved Kubernetes API server host (e.g. kubernetes.default.svc or 10.43.0.1)'
+    )
     .optional(),
 });
 

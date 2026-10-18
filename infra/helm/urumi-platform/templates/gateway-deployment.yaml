@@ -32,6 +32,27 @@ spec:
         fsGroupChangePolicy: "OnRootMismatch"
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: volume-permissions
+          image: {{ if .Values.gateway.digest }}{{ printf "%s@%s" .Values.gateway.image .Values.gateway.digest | quote }}{{ else }}{{ .Values.gateway.image | default "urumi-gateway:1.0.0" | quote }}{{ end }}
+          imagePullPolicy: {{ .Values.gateway.imagePullPolicy | default "IfNotPresent" | quote }}
+          command:
+            - sh
+            - -c
+            - "chown -R 10001:10001 /data && chmod 0700 /data"
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - FOWNER
+          volumeMounts:
+            - name: gateway-data
+              mountPath: /data
       containers:
         - name: gateway
           image: {{ if .Values.gateway.digest }}{{ printf "%s@%s" .Values.gateway.image .Values.gateway.digest | quote }}{{ else }}{{ .Values.gateway.image | default "urumi-gateway:1.0.0" | quote }}{{ end }}

@@ -40,6 +40,9 @@ export function enforceDatabasePermissions(dbPath: string): void {
   if (fs.existsSync(dir)) {
     try {
       fs.chmodSync(dir, 0o700);
+      const stat = fs.statSync(dir);
+      const modeOctal = (stat.mode & 0o777).toString(8);
+      logger.info('Database directory POSIX permissions verified', { dir, mode: modeOctal, uid: stat.uid, gid: stat.gid });
     } catch (err: unknown) {
       logger.warn('Could not tighten permissions on database directory', {
         dir,
@@ -52,6 +55,9 @@ export function enforceDatabasePermissions(dbPath: string): void {
   if (fs.existsSync(dbPath)) {
     try {
       fs.chmodSync(dbPath, 0o600);
+      const stat = fs.statSync(dbPath);
+      const modeOctal = (stat.mode & 0o777).toString(8);
+      logger.info('Database file POSIX permissions verified', { dbPath, mode: modeOctal, uid: stat.uid, gid: stat.gid });
     } catch (err: unknown) {
       logger.warn('Could not tighten permissions on database file', {
         dbPath,
@@ -65,6 +71,9 @@ export function enforceDatabasePermissions(dbPath: string): void {
     if (fs.existsSync(companion)) {
       try {
         fs.chmodSync(companion, 0o600);
+        const stat = fs.statSync(companion);
+        const modeOctal = (stat.mode & 0o777).toString(8);
+        logger.info('Companion file POSIX permissions verified', { file: companion, mode: modeOctal, uid: stat.uid, gid: stat.gid });
       } catch {
         // Ignore if temporary locked
       }
@@ -204,6 +213,9 @@ export class DatabaseManager {
         throw err;
       }
     }
+
+    // Verify and enforce strict POSIX permissions on database and directory
+    enforceDatabasePermissions(this.dbPath);
 
     logger.info('SQLite database initialized successfully', {
       dbPath: this.dbPath,

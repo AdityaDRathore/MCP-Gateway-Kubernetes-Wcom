@@ -44,9 +44,8 @@ gateway:
   imagePullPolicy: "IfNotPresent"
   # Single replica is strictly required when using SQLite on ReadWriteOnce PVC (/data/gateway.db)
   # to prevent database locking and multi-writer corruption.
-  replicas: 1
   k8sApiClusterIp: "10.43.0.1/32"
-  k8sControlPlaneCidr: "172.19.0.0/16"
+  k8sControlPlaneEndpoint: "10.43.0.1/32"
   resources:
     requests:
       cpu: "100m"

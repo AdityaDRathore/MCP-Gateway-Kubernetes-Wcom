@@ -79,6 +79,7 @@ export interface DirectKubernetesClientOptions {
   caCertPath?: string;
   insecureSkipTlsVerify?: boolean;
   requestTimeoutMs?: number;
+  allowLocalhostForTesting?: boolean;
 }
 
 /**
@@ -139,23 +140,38 @@ export class DirectKubernetesSecretClient implements IKubernetesSecretClient {
       );
     }
 
-    // 4. Reject prohibited destinations (e.g. cloud metadata services)
+    // 4. Enforce approved Kubernetes API server host/address policy
     const hostname = parsed.hostname.toLowerCase();
-    if (
-      hostname === '169.254.169.254' ||
-      hostname === 'metadata.google.internal' ||
-      hostname.endsWith('.google.internal') ||
-      hostname === 'instance-data'
-    ) {
+    const isProduction = process.env.NODE_ENV === 'production';
+    const isTest = process.env.NODE_ENV === 'test';
+    const allowTestOverride = !isProduction && (Boolean(options.allowLocalhostForTesting) || isTest);
+
+    const allowedHosts = new Set([
+      'kubernetes.default.svc',
+      'kubernetes.default.svc.cluster.local',
+      'kubernetes.default',
+      'kubernetes',
+      '10.43.0.1',
+    ]);
+    if (envHost) {
+      allowedHosts.add(envHost.toLowerCase());
+    }
+
+    if (allowTestOverride) {
+      allowedHosts.add('localhost');
+      allowedHosts.add('127.0.0.1');
+      allowedHosts.add('::1');
+    }
+
+    if (!allowedHosts.has(hostname)) {
       throw new KubernetesApiError(
-        `Kubernetes API URL destination "${hostname}" is prohibited`,
+        `Kubernetes API destination "${hostname}" is not an approved Kubernetes API server destination`,
         500,
         'SecurityConfigurationError'
       );
     }
 
     // 5. Never allow TLS verification to be disabled in production
-    const isProduction = process.env.NODE_ENV === 'production';
     if (options.insecureSkipTlsVerify && isProduction) {
       throw new KubernetesApiError(
         'insecureSkipTlsVerify is strictly prohibited in production mode',
@@ -176,12 +192,26 @@ export class DirectKubernetesSecretClient implements IKubernetesSecretClient {
       try {
         ca = fs.readFileSync(this.caCertPath);
       } catch (err: unknown) {
+        if (isProduction) {
+          throw new KubernetesApiError(
+            `Failed to read Kubernetes CA certificate at "${this.caCertPath}": ${err instanceof Error ? err.message : String(err)}`,
+            500,
+            'SecurityConfigurationError'
+          );
+        }
         logger.warn('Could not read Kubernetes CA certificate; falling back to system CAs', {
           caCertPath: this.caCertPath,
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    } else if (isProduction && !allowTestOverride) {
+      throw new KubernetesApiError(
+        `Kubernetes CA certificate file not found at "${this.caCertPath}". In-cluster TLS verification requires the cluster CA certificate.`,
+        500,
+        'SecurityConfigurationError'
+      );
     }
+
     this.httpsAgent = new https.Agent({
       ca,
       rejectUnauthorized: !this.insecureSkipTlsVerify,

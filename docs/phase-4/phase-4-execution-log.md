@@ -634,7 +634,26 @@ Following independent verification of the codebase against Technical Head review
    - Create secret in `urumi`: **HTTP 403 Forbidden**
    - Delete secret from `urumi-gateway-secrets`: **HTTP 200 OK**
 
-7. **Protected WooCommerce Invariant Verification:**
+7. **Security Tightening Remediation (Operator Review Findings):**
+   - **K8s API Destination Allowlist & TLS Enforcement (`apps/gateway/src/k8s/secret-client.ts`, `apps/gateway/src/config.ts`):**
+     - Eliminated arbitrary HTTPS URLs. Implemented an explicit destination allowlist policy restricting K8s API communication to approved hosts: `kubernetes.default.svc`, `kubernetes.default.svc.cluster.local`, `kubernetes.default`, `kubernetes`, and `10.43.0.1`.
+     - Physical production lock: Localhost and IP loopbacks are strictly rejected in production mode.
+     - Fail-closed TLS verification: In production, requires the cluster CA certificate (`/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`) and strictly verifies the API server identity against the cluster CA.
+   - **Narrowed NetworkPolicy Egress Rules (`infra/helm/urumi-platform/templates/networkpolicy.yaml`):**
+     - Replaced broad `172.19.0.0/16` CIDR with exact `/32` endpoints and single ports:
+       - Pre-DNAT Service ClusterIP: `10.43.0.1/32` strictly on TCP port `443`.
+       - Post-DNAT Control-Plane Node: `172.19.0.2/32` strictly on TCP port `6443`.
+     - Empirically verified packet filtering: connections to `10.43.0.1:6443`, `172.19.0.2:443`, and arbitrary bridge subnet hosts (e.g. `172.19.0.3`) are dropped/rejected.
+   - **Storage Confidentiality Verification (`volume-permissions` InitContainer & POSIX Modes):**
+     - Added an unprivileged-preparation `initContainer` in `gateway-deployment.yaml` executing `chown -R 10001:10001 /data && chmod 0700 /data` with dropped capabilities.
+     - In-cluster empirical verification:
+       - Mount root `/data`: `drwx------` (`0700`, owner `10001:10001`).
+       - Primary database `/data/gateway.db`: `-rw-------` (`0600`, owner `10001:10001`).
+       - WAL file `/data/gateway.db-wal`: `-rw-------` (`0600`, owner `10001:10001`).
+       - SHM file `/data/gateway.db-shm`: `-rw-------` (`0600`, owner `10001:10001`).
+       - Zero `EPERM` startup warnings; telemetry logs verify exact `0700` / `0600` octal modes.
+
+8. **Protected WooCommerce Invariant Verification:**
    - Product 10: "Urumi Test Mug" (SKU: `URUMI-MUG-001`, Price: `299`, Status: `publish`) — **UNMUTATED**
    - Product 11: "Wireless Mouse Demo" (SKU: `URUMI-MOUSE-001`, Price: `799`, Status: `publish`) — **UNMUTATED**
    - Product 12: "Notebook Demo" (SKU: `URUMI-NOTE-001`, Price: `149`, Status: `publish`) — **UNMUTATED**

@@ -60,15 +60,18 @@ spec:
         - protocol: TCP
           port: 3000
     # 3. Allow egress to Kubernetes API server for dynamic Secret lifecycle
-    # Accounts for pre-DNAT ClusterIP (10.43.0.1:443) and post-DNAT node endpoint (:6443)
+    # Pre-DNAT ClusterIP rule (strictly TCP port 443 to Kubernetes Service ClusterIP)
     - to:
         - ipBlock:
             cidr: {{ .Values.gateway.k8sApiClusterIp | default "10.43.0.1/32" }}
-        - ipBlock:
-            cidr: {{ .Values.gateway.k8sControlPlaneCidr | default "172.19.0.0/16" }}
       ports:
         - protocol: TCP
           port: 443
+    # Post-DNAT control-plane host endpoint (strictly TCP port 6443 to verified control-plane node IP)
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.gateway.k8sControlPlaneEndpoint | default "172.19.0.2/32" }}
+      ports:
         - protocol: TCP
           port: 6443
 ---

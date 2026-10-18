@@ -58,7 +58,7 @@ gateway:
     name: "urumi-gateway-sa"
   secretsNamespace: "urumi-gateway-secrets"
   k8sApiClusterIp: "10.43.0.1/32"
-  k8sControlPlaneCidr: "172.19.0.0/16"
+  k8sControlPlaneEndpoint: "172.19.0.2/32"
   resources:
     requests:
       cpu: "50m"

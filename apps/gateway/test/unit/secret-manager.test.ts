@@ -264,7 +264,7 @@ describe('Gate G7: Kubernetes Secret Manager Unit Tests', () => {
     );
   });
 
-  test('DirectKubernetesSecretClient rejects plain HTTP, userinfo, metadata, and production insecureSkipTlsVerify', () => {
+  test('DirectKubernetesSecretClient enforces approved destination allowlist, rejects arbitrary hosts, userinfo, and production insecureSkipTlsVerify', () => {
     // 1. Plain HTTP rejected
     assert.throws(
       () => new DirectKubernetesSecretClient({ apiUrl: 'http://kubernetes.default.svc:80' }),
@@ -277,19 +277,33 @@ describe('Gate G7: Kubernetes Secret Manager Unit Tests', () => {
       /must not contain embedded userinfo credentials/
     );
 
-    // 3. Prohibited cloud metadata destination rejected
+    // 3. Arbitrary external destination rejected fail-closed
     assert.throws(
-      () => new DirectKubernetesSecretClient({ apiUrl: 'https://169.254.169.254:443' }),
-      /destination "169.254.169.254" is prohibited/
+      () => new DirectKubernetesSecretClient({ apiUrl: 'https://evil-server.com:443' }),
+      /is not an approved Kubernetes API server destination/
     );
 
-    // 4. Query parameters or fragments rejected
+    // 4. Cloud metadata destination rejected
+    assert.throws(
+      () => new DirectKubernetesSecretClient({ apiUrl: 'https://169.254.169.254:443' }),
+      /is not an approved Kubernetes API server destination/
+    );
+
+    // 5. Query parameters or fragments rejected
     assert.throws(
       () => new DirectKubernetesSecretClient({ apiUrl: 'https://kubernetes.default.svc:443?token=leak' }),
       /must not contain query parameters or fragments/
     );
 
-    // 5. Insecure TLS skip rejected in production mode
+    // 6. Approved destinations accepted
+    assert.doesNotThrow(
+      () => new DirectKubernetesSecretClient({ apiUrl: 'https://kubernetes.default.svc:443' })
+    );
+    assert.doesNotThrow(
+      () => new DirectKubernetesSecretClient({ apiUrl: 'https://10.43.0.1:443' })
+    );
+
+    // 7. Insecure TLS skip rejected in production mode
     const originalEnv = process.env.NODE_ENV;
     try {
       process.env.NODE_ENV = 'production';
@@ -300,6 +314,16 @@ describe('Gate G7: Kubernetes Secret Manager Unit Tests', () => {
             insecureSkipTlsVerify: true,
           }),
         /insecureSkipTlsVerify is strictly prohibited in production mode/
+      );
+
+      // 8. Physical production lock: localhost rejected in production mode
+      assert.throws(
+        () =>
+          new DirectKubernetesSecretClient({
+            apiUrl: 'https://127.0.0.1:8443',
+            allowLocalhostForTesting: true,
+          }),
+        /is not an approved Kubernetes API server destination/
       );
     } finally {
       process.env.NODE_ENV = originalEnv;
