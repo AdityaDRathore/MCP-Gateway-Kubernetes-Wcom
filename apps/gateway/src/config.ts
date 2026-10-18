@@ -37,6 +37,18 @@ export const ConfigSchema = z.object({
   MAX_RESULT_SIZE_BYTES: z.coerce.number().int().positive('MAX_RESULT_SIZE_BYTES must be positive').default(1048576),
   GLOBAL_CONCURRENCY_LIMIT: z.coerce.number().int().positive('GLOBAL_CONCURRENCY_LIMIT must be positive').default(20),
   PER_UPSTREAM_CONCURRENCY_LIMIT: z.coerce.number().int().positive('PER_UPSTREAM_CONCURRENCY_LIMIT must be positive').default(4),
+
+  // === Gate G7: Kubernetes Secret Lifecycle Configuration ===
+  KUBERNETES_SECRETS_NAMESPACE: z.string()
+    .min(1, 'KUBERNETES_SECRETS_NAMESPACE must not be empty')
+    .max(63, 'KUBERNETES_SECRETS_NAMESPACE must not exceed 63 characters')
+    .regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, 'KUBERNETES_SECRETS_NAMESPACE must be a valid RFC 1123 DNS label')
+    .refine(
+      (ns) => !['urumi', 'default', 'kube-system', 'kube-public', 'kube-node-lease'].includes(ns.toLowerCase()),
+      'KUBERNETES_SECRETS_NAMESPACE cannot target core workload or cluster system namespaces (urumi, default, kube-system, kube-public, kube-node-lease)'
+    )
+    .default('urumi-gateway-secrets'),
+  KUBERNETES_API_URL: z.string().url('KUBERNETES_API_URL must be a valid URL').optional(),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;

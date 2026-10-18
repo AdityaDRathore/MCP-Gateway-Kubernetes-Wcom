@@ -165,4 +165,90 @@ export class AuditService {
   getAuditById(id: string): AuditRecord | null {
     return this.repo.findAuditById(id);
   }
+
+  /**
+   * Phase 1: Commits initial 'pending' audit record before an administrative operation.
+   * Throws AuditStartError on write failure (Fail Closed).
+   */
+  startAdminAudit(params: {
+    userId?: string | null;
+    upstreamSlug?: string | null;
+    action: string;
+    payloadSummary?: unknown;
+  }): string {
+    const auditId = crypto.randomUUID();
+    const argumentsHash = computeArgumentsHash(params.payloadSummary ?? {});
+
+    try {
+      this.repo.insertAuditStart({
+        id: auditId,
+        user_id: params.userId ?? null,
+        upstream_slug: params.upstreamSlug ?? null,
+        tool_name: params.action,
+        arguments_hash: argumentsHash,
+      });
+
+      return auditId;
+    } catch (err: unknown) {
+      logger.error('Phase 1 admin audit start write failed. Halting administrative operation to preserve fail-closed invariant.', {
+        auditId,
+        action: params.action,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw new AuditStartError(
+        `Failed to persist administrative audit start record: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  /**
+   * Phase 2: Finalizes administrative audit outcome.
+   * If finalization write fails after a Kubernetes or SQLite side effect, returns degraded: true.
+   */
+  finalizeAdminAudit(
+    auditId: string,
+    options: {
+      status: AuditStatus;
+      startTimeMs: number;
+      errorCode?: string | null;
+      errorMessage?: string | null;
+    }
+  ): FinalizeAuditResult {
+    return this.finalizeAudit(auditId, options);
+  }
+
+  /**
+   * Helper that records a complete administrative event.
+   * Fingerprints payload summary without storing raw credentials or PII.
+   */
+  recordAdminEvent(params: {
+    userId?: string | null;
+    upstreamSlug?: string | null;
+    action: string;
+    status: AuditStatus;
+    durationMs?: number;
+    errorCode?: string | null;
+    errorMessage?: string | null;
+    payloadSummary?: unknown;
+  }): { auditId: string; degraded: boolean } {
+    const startTimeMs = Date.now() - (params.durationMs ?? 0);
+    const auditId = this.startAdminAudit({
+      userId: params.userId,
+      upstreamSlug: params.upstreamSlug,
+      action: params.action,
+      payloadSummary: params.payloadSummary,
+    });
+
+    const finalizeResult = this.finalizeAdminAudit(auditId, {
+      status: params.status,
+      startTimeMs,
+      errorCode: params.errorCode,
+      errorMessage: params.errorMessage,
+    });
+
+    return {
+      auditId,
+      degraded: finalizeResult.degraded,
+    };
+  }
 }

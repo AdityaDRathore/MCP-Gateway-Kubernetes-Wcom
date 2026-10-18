@@ -18,6 +18,7 @@ import {
 import { CatalogService } from './upstream/catalog-service.js';
 import { ToolRouter } from './upstream/tool-router.js';
 import { AuthenticatedUser } from './auth/authenticator.js';
+import { AdminService } from './admin/admin-service.js';
 
 // Polyfill global crypto for SDK Streamable HTTP transport streamId generation
 if (typeof (globalThis as any).crypto === 'undefined') {
@@ -33,6 +34,7 @@ export interface ServerOptions {
   readinessCheck?: () => boolean;
   catalogService?: CatalogService;
   toolRouter?: ToolRouter;
+  adminService?: AdminService;
   onMcpRequestStart?: (req: Request, res: Response) => void | Promise<void>;
   onMcpRequestCleanup?: (reason: 'finish' | 'close' | 'error') => void;
 }
@@ -165,8 +167,8 @@ export function createExpressApp(options: ServerOptions): express.Application {
   app.get('/health/live', liveHandler);
   app.get('/health/ready', createReadyHandler(readinessCheck));
 
-  // Reserved admin API router (mounted at /admin/v1)
-  app.use('/admin/v1', createAdminRouter(authenticator));
+  // Administrative API router (mounted at /admin/v1)
+  app.use('/admin/v1', createAdminRouter(authenticator, options.adminService));
 
   // Downstream MCP endpoint pre-checks: HTTP Method and Content-Type validation
   app.all('/mcp', (req: Request, res: Response, next: NextFunction): void => {

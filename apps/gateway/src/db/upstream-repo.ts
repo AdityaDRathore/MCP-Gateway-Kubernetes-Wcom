@@ -206,4 +206,32 @@ export class UpstreamRepository {
 
     return { inserted, existing };
   }
+
+  deleteUpstream(idOrSlug: string): boolean {
+    const result = this.db
+      .prepare('DELETE FROM upstreams WHERE id = ? OR slug = ?;')
+      .run(idOrSlug, idOrSlug);
+    return Number(result.changes) > 0;
+  }
+
+  getStaleProvisioningUpstreams(cutoffTimestampSeconds: number): UpstreamRow[] {
+    const rows = this.db
+      .prepare("SELECT * FROM upstreams WHERE status = 'provisioning' AND created_at < ?;")
+      .all(cutoffTimestampSeconds) as unknown as UpstreamRow[];
+    return rows;
+  }
+
+  getCleanupRequiredUpstreams(): UpstreamRow[] {
+    const rows = this.db
+      .prepare("SELECT * FROM upstreams WHERE status IN ('cleanup_required', 'deleting');")
+      .all() as unknown as UpstreamRow[];
+    return rows;
+  }
+
+  getActiveUpstreamsWithSecrets(): UpstreamRow[] {
+    const rows = this.db
+      .prepare("SELECT * FROM upstreams WHERE secret_ref_name IS NOT NULL;")
+      .all() as unknown as UpstreamRow[];
+    return rows;
+  }
 }

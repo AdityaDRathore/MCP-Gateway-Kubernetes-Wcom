@@ -10,6 +10,7 @@ import { logger } from '../logging/logger.js';
 
 export interface UpstreamManagerOptions {
   allowLocalhostForTesting?: boolean;
+  credentialsResolver?: (secretName: string) => Promise<Record<string, string> | null>;
 }
 
 /**
@@ -101,12 +102,31 @@ export class UpstreamManager {
 
   /**
    * Synchronizes managed client instances with current upstream rows in the repository.
+   * Creates new clients for added upstreams, prunes removed clients, and updates state if changed.
    */
   syncClientsWithRepository(): void {
     const rows = this.upstreamRepo.getAllUpstreams();
+    const activeSlugs = new Set(rows.map((r) => r.slug));
+
+    // Remove clients that no longer exist in SQLite
+    for (const [slug, client] of this.clients.entries()) {
+      if (!activeSlugs.has(slug)) {
+        client.close().catch(() => {});
+        this.clients.delete(slug);
+      }
+    }
+
+    // Add or verify clients from SQLite
     for (const row of rows) {
-      if (!this.clients.has(row.slug)) {
+      const existing = this.clients.get(row.slug);
+      if (!existing) {
         this.registerClientFromRow(row);
+      } else {
+        const expectedEnabled = Boolean(row.is_enabled === 1 && row.status === 'active');
+        if (existing.isEnabled() !== expectedEnabled) {
+          existing.close().catch(() => {});
+          this.registerClientFromRow(row);
+        }
       }
     }
   }
@@ -169,6 +189,67 @@ export class UpstreamManager {
     return this.catalogService.getSnapshot();
   }
 
+  /**
+   * Dynamically registers a newly created upstream and executes tool discovery.
+   */
+  async registerAndDiscover(row: UpstreamRow): Promise<DiscoveredToolsResult> {
+    const existing = this.clients.get(row.slug);
+    if (existing) {
+      await existing.close();
+      this.clients.delete(row.slug);
+    }
+
+    const client = this.registerClientFromRow(row);
+    try {
+      const result = await client.discoverTools();
+      await this.refreshAll();
+      return result;
+    } catch (err: unknown) {
+      // Tear down failed client
+      await client.close();
+      this.clients.delete(row.slug);
+      await this.refreshAll();
+      throw err;
+    }
+  }
+
+  /**
+   * Dynamically updates an existing upstream client and refreshes the catalog.
+   */
+  async updateClient(row: UpstreamRow): Promise<void> {
+    const existing = this.clients.get(row.slug);
+    if (existing) {
+      await existing.close();
+      this.clients.delete(row.slug);
+    }
+    this.registerClientFromRow(row);
+    await this.refreshAll();
+  }
+
+  /**
+   * Dynamically removes an upstream client and refreshes the catalog.
+   */
+  async removeClient(slug: string): Promise<void> {
+    const client = this.clients.get(slug);
+    if (client) {
+      await client.close();
+      this.clients.delete(slug);
+    }
+    await this.refreshAll();
+  }
+
+  /**
+   * Dynamically toggles client enabled status and refreshes the catalog snapshot.
+   */
+  async setClientEnabled(slug: string, isEnabled: boolean): Promise<CatalogSnapshot> {
+    const row = this.upstreamRepo.getUpstreamBySlug(slug);
+    if (row) {
+      const updatedRow = { ...row, is_enabled: isEnabled ? 1 : 0 };
+      await this.updateClient(updatedRow);
+    }
+    return this.catalogService.getSnapshot();
+  }
+
   private registerClientFromRow(row: UpstreamRow): ManagedUpstreamClient {
     const isEnabled = Boolean(row.is_enabled === 1 && row.status === 'active');
     const client = new ManagedUpstreamClient({
@@ -177,6 +258,9 @@ export class UpstreamManager {
       timeoutMs: row.timeout_ms,
       isEnabled,
       allowLocalhostForTesting: this.options.allowLocalhostForTesting,
+      secretRefName: row.secret_ref_name,
+      secretRefKey: row.secret_ref_key,
+      credentialsResolver: this.options.credentialsResolver,
     });
 
     this.clients.set(row.slug, client);

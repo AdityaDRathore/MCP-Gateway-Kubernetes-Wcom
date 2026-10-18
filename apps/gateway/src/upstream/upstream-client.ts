@@ -22,6 +22,9 @@ export interface ManagedClientConfig {
   timeoutMs: number;
   isEnabled: boolean;
   allowLocalhostForTesting?: boolean;
+  secretRefName?: string | null;
+  secretRefKey?: string | null;
+  credentialsResolver?: (secretName: string) => Promise<Record<string, string> | null>;
 }
 
 /**
@@ -71,6 +74,8 @@ export class ManagedUpstreamClient {
 
   /**
    * Ensures transport connection is established to the upstream service.
+   * If a Secret is referenced, resolves credentials and configures authentication headers.
+   * Never downgrades authentication or falls back to unauthenticated requests when credentials fail.
    */
   async ensureConnected(signal?: AbortSignal): Promise<Client> {
     if (this.client && this.transport) {
@@ -81,8 +86,49 @@ export class ManagedUpstreamClient {
       allowLocalhostForTesting: this.config.allowLocalhostForTesting,
     });
 
+    let headers: Record<string, string> | undefined;
+
+    if (this.config.secretRefName) {
+      if (!this.config.credentialsResolver) {
+        throw new UpstreamConnectionError(
+          `Upstream service '${this.config.slug}' requires Kubernetes Secret '${this.config.secretRefName}', but no credentials resolver is configured`
+        );
+      }
+
+      const secretData = await this.config.credentialsResolver(this.config.secretRefName);
+      if (!secretData || Object.keys(secretData).length === 0) {
+        throw new UpstreamConnectionError(
+          `Upstream service '${this.config.slug}' requires Kubernetes Secret '${this.config.secretRefName}', but Secret was not found or is empty in Kubernetes`
+        );
+      }
+
+      headers = {};
+      const targetKey = this.config.secretRefKey || 'token';
+
+      if (secretData[targetKey]) {
+        if (targetKey.toLowerCase().includes('token') || targetKey.toLowerCase().includes('bearer')) {
+          headers['Authorization'] = `Bearer ${secretData[targetKey]}`;
+        } else if (targetKey.toLowerCase().includes('api') || targetKey.toLowerCase().includes('key')) {
+          headers['X-API-Key'] = secretData[targetKey];
+        } else {
+          headers[targetKey] = secretData[targetKey];
+        }
+      } else if (secretData['token']) {
+        headers['Authorization'] = `Bearer ${secretData['token']}`;
+      } else if (secretData['apiKey'] || secretData['api_key']) {
+        headers['X-API-Key'] = secretData['apiKey'] || secretData['api_key'];
+      } else {
+        for (const [k, v] of Object.entries(secretData)) {
+          headers[k] = v;
+        }
+      }
+    }
+
     await this.close();
-    this.transport = new StreamableHTTPClientTransport(new URL(validated.normalizedFqdnUrl));
+    this.transport = new StreamableHTTPClientTransport(
+      new URL(validated.normalizedFqdnUrl),
+      headers ? { requestInit: { headers } } : undefined
+    );
     this.client = new Client(
       { name: 'urumi-gateway-upstream-client', version: '1.0.0' },
       { capabilities: {} }

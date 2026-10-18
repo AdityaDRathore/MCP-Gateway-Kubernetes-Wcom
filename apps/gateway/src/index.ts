@@ -35,20 +35,45 @@ import { AuditRepository } from './db/audit-repo.js';
 import { AuditService } from './audit/audit-service.js';
 import { ToolRouter } from './upstream/tool-router.js';
 
+import { DirectKubernetesSecretClient } from './k8s/secret-client.js';
+import { SecretManager } from './k8s/secret-manager.js';
+import { AdminService } from './admin/admin-service.js';
+
 // Instantiate SQLite-backed authentication
 const apiKeyRepo = new ApiKeyRepository(dbManager.getDb());
 const apiKeyService = new ApiKeyService(apiKeyRepo);
 const authenticator = new DatabaseAuthenticator(apiKeyService);
 
+// Instantiate Kubernetes Secret Manager
+const secretClient = new DirectKubernetesSecretClient({
+  apiUrl: config.KUBERNETES_API_URL,
+});
+const secretManager = new SecretManager(secretClient, {
+  namespace: config.KUBERNETES_SECRETS_NAMESPACE,
+});
+
 // Instantiate Upstream Manager & Dynamic Catalog
 const upstreamRepo = new UpstreamRepository(dbManager.getDb());
 const catalogService = new CatalogService();
-const upstreamManager = new UpstreamManager(upstreamRepo, catalogService);
+const upstreamManager = new UpstreamManager(upstreamRepo, catalogService, {
+  allowLocalhostForTesting: config.NODE_ENV !== 'production',
+  credentialsResolver: (secretName) => secretManager.getSecretData(secretName),
+});
 
 // Instantiate Audit Service & Dynamic Tool Router
 const auditRepo = new AuditRepository(dbManager.getDb());
 const auditService = new AuditService(auditRepo);
 const toolRouter = new ToolRouter(catalogService, upstreamManager, auditService, config);
+
+const adminService = new AdminService(
+  upstreamRepo,
+  secretManager,
+  upstreamManager,
+  auditService,
+  {
+    allowLocalhostForTesting: config.NODE_ENV !== 'production',
+  }
+);
 
 // Initialize upstreams and discover initial catalog
 try {
@@ -59,11 +84,22 @@ try {
   });
 }
 
+// Run startup reconciliation for crashed provisioning, cleanup, and orphaned secrets
+try {
+  const recon = await adminService.runStartupReconciliation();
+  logger.info('Completed startup reconciliation', recon);
+} catch (err: unknown) {
+  logger.warn('Startup reconciliation encountered errors', {
+    error: err instanceof Error ? err.message : String(err),
+  });
+}
+
 const app = createExpressApp({
   config,
   authenticator,
   catalogService,
   toolRouter,
+  adminService,
   readinessCheck: () => dbManager.isHealthy(),
 });
 
