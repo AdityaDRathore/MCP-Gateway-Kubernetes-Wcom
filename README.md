@@ -42,7 +42,7 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 
 ---
 
-## Current Status: Phase 3 Complete (Custom WooCommerce MCP Server Deployed)
+## Current Status: Phase 4 Complete (Team MCP Gateway Core, Dynamic Upstream Federation & Security Hardening)
 
 - **Phase 1 (Foundation & Scaffolding)**:
   - **Node.js LTS**: Pinned to **Node.js 24 LTS (`v24.20.0`)** via `.nvmrc` and `engines`.
@@ -60,8 +60,16 @@ For full system architecture, network boundaries, and resource budgeting, see [`
   - **In-Cluster Cryptographic Auth**: Uses RFC 5849 OAuth 1.0a HMAC-SHA256 for internal pod-to-pod communication (`urumi-wordpress:80`). Consumer secret is never sent over the wire ([ADR-007](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md)).
   - **Private ClusterIP & NetworkPolicy**: Deployed as `urumi-woocommerce-mcp:3000` with zero public Ingress. Isolated via K3s `kube-router` NetworkPolicy packet filtering.
   - **Comprehensive Regression Suite**: 120/120 automated tests pass (46 unit, 35 protocol, 39 live integration), plus in-cluster verifier pod execution.
-  - **Operational Footprint**: 1m CPU cores, 39 MiB memory under load. Graceful `SIGTERM` shutdown exit code 0 in ~1.2s.
-  - **Runbooks & Contracts**: Full runbooks in [`docs/phase-3/operational-runbook.md`](docs/phase-3/operational-runbook.md) and [`docs/phase-3/five-tool-contract.md`](docs/phase-3/five-tool-contract.md).
+- **Phase 4 (Team MCP Gateway Core, Dynamic Federation & Security Hardening)**:
+  - **Central Team MCP Gateway**: Implemented in TypeScript (`apps/gateway`) providing a unified downstream MCP entrypoint (`POST /mcp`) over Traefik Ingress on `dashboard.127.0.0.1.nip.io:8080`.
+  - **Dynamic Tool Federation & Namespacing**: Dynamic discovery and aggregation across 3 upstream microservices (`woocommerce-mcp`, `mcp-crm`, `mcp-tasks`) with automated namespacing (`crm__*`, `tasks__*`, `woocommerce__*`). Exposes 10 active tools.
+  - **Native Embedded Persistence**: Node.js 24 core `node:sqlite` in WAL mode on dedicated PVC (`urumi-gateway-pvc`, 500Mi) with non-locking online `VACUUM INTO` backup capability.
+  - **Constant-Time Authentication & RBAC**: API keys hashed with SHA-256 and verified using `crypto.timingSafeEqual`. Enforces member vs admin role separation. Private Admin REST API (`/admin/v1/upstreams`) strictly hidden from public Ingress.
+  - **Two-Phase Cryptographic Audit Logging**: Request ingress and egress logged with deterministic SHA-256 argument hashes (`args_hash`), guaranteeing zero cleartext credential or PII leakage.
+  - **Resilience & Concurrency Control**: Global concurrency ceiling (20) with HTTP 429 backpressure, per-upstream FIFO queues (4 active, 10 queued), and 10,000ms fail-closed `AbortController` timeouts.
+  - **Kubernetes Security Boundaries**: Upstream credentials isolated in `urumi-gateway-secrets` with strict SA RBAC scoping. Default-deny egress NetworkPolicies blocking direct access to WordPress (port 80) and MariaDB (port 3306). Hardened local-path storage with `DAC_OVERRIDE` capability for repeatable pod recreations.
+  - **Test & Benchmark Conformance**: 360/360 passing tests across all workspaces. Empirical benchmarks show p50 latency of ~20ms, zero memory leaks, and stable throughput under load. Zero state drift on protected store entities (Products 10, 11, 12 and Order #14).
+
 
 ---
 
@@ -70,10 +78,10 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 ```
 ├── apps/
 │   ├── dashboard/            # (Phase 5) React + Vite dashboard & chat UI
-│   ├── gateway/              # (Phase 4) Team MCP Gateway backend
+│   ├── gateway/              # (Phase 4 Verified) Team MCP Gateway backend
 │   ├── woocommerce-mcp/      # (Phase 3 Verified) Custom WooCommerce MCP server
-│   ├── mcp-crm/              # (Phase 4 Planned) Internal CRM upstream MCP server
-│   └── mcp-tasks/            # (Phase 4 Planned) Internal Tasks upstream MCP server
+│   ├── mcp-crm/              # (Phase 4 Verified) Internal CRM upstream MCP server
+│   └── mcp-tasks/            # (Phase 4 Verified) Internal Tasks upstream MCP server
 ├── packages/
 │   └── shared/               # Shared TypeScript schemas, types, and utilities
 ├── infra/
@@ -89,10 +97,16 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 ├── docs/
 │   ├── architecture.md       # 4-layer architecture & storage failure models
 │   ├── requirements-traceability.md # Complete requirements matrix & DoD test plan
-│   ├── decisions/            # Architecture Decision Records (ADRs 001–007)
+│   ├── decisions/            # Architecture Decision Records (ADRs 001–015)
 │   ├── phase-1/              # Phase 1 audit & verification reports
 │   ├── phase-2/              # Phase 2 store deployment runbooks
-│   └── phase-3/              # Phase 3 MCP contracts, runbooks & completion reports
+│   ├── phase-3/              # Phase 3 MCP contracts, runbooks & completion reports
+│   └── phase-4/              # Phase 4 execution logs, recovery & acceptance runbooks
+├── documentation/            # Comprehensive multi-phase study & technical reference manuals
+│   ├── phase 1/
+│   ├── phase 2/
+│   ├── phase 3/
+│   └── phase 4/              # Phase 4 Study Material & Technical Context Reference
 ├── package.json              # npm workspaces root
 └── tsconfig.base.json        # Base TypeScript compiler configuration
 ```
@@ -283,6 +297,39 @@ kubectl -n urumi exec deployment/urumi-wordpress -- bash -c \
 # Expected: Products 10, 11, 12 published; Order #14 processing (₹299.00)
 ```
 
+### 12. Verify Team MCP Gateway & Dynamic Upstreams (Phase 4)
+Verify the central Team MCP Gateway aggregating WooCommerce, CRM, and Tasks:
+
+```bash
+# 1. Run full 360-test monorepo regression suite across all workspaces
+npm test
+# Expected: 360 tests pass, 0 fail (gateway: 218, woocommerce-mcp: 81, mcp-crm: 26, mcp-tasks: 35)
+
+# 2. Run automated empirical performance & resilience benchmark
+npm --workspace=gateway run test:benchmark
+# Expected: p50 latency ~20ms, 0% error rate at standard load, stable memory usage (~54Mi)
+
+# 3. Verify downstream MCP protocol handshake and catalog discovery via Ingress
+curl -s -H "Host: dashboard.127.0.0.1.nip.io" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <ADMIN_OR_MEMBER_KEY>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+  http://127.0.0.1:8080/mcp | jq '.result.tools[].name'
+# Expected: 10 tools returned (crm__*, tasks__*, woocommerce__*)
+
+# 4. Verify private Admin API perimeter isolation (expect 404 from public Ingress)
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Host: dashboard.127.0.0.1.nip.io" \
+  http://127.0.0.1:8080/admin/v1/upstreams
+# Expected: 404
+
+# 5. Confirm zero state drift on protected store data
+kubectl -n urumi exec deployment/urumi-wordpress -- wp post list \
+  --post_type=product,shop_order --allow-root --fields=ID,post_title,post_status,post_type
+# Expected: Products 10, 11, 12 published; Order #14 processing (₹299.00)
+```
+
 ---
 
 ## Architecture Decision Records (ADRs)
@@ -297,18 +344,21 @@ kubectl -n urumi exec deployment/urumi-wordpress -- bash -c \
 - [**ADR-008**](docs/decisions/ADR-008-five-tool-contract-and-pii-redaction.md): Five-Tool Least-Privilege Contract, Bounded Input Validation, and Customer PII Redaction
 - [**ADR-009**](docs/decisions/ADR-009-kubernetes-network-isolation-and-conditional-policies.md): Cluster-Internal Workload Isolation, Non-Root Execution, and Conditional NetworkPolicies
 - [**ADR-010**](docs/decisions/ADR-010-container-image-identity-and-digest-pinning-boundary.md): Container Image Identity, Local CRI Resolution, and Production Immutability Separation
+- [**ADR-011**](docs/decisions/ADR-011-centralized-mcp-gateway-architecture.md): Centralized MCP Gateway vs Direct Agent-to-Server Tool Access
+- [**ADR-012**](docs/decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md): Gateway Persistence via Node.js 24 Core `node:sqlite` in WAL Mode
+- [**ADR-013**](docs/decisions/ADR-013-api-key-auth-constant-time-and-admin-bootstrap.md): Downstream API Key Authentication, Constant-Time Verification & Admin Bootstrap
+- [**ADR-014**](docs/decisions/ADR-014-two-phase-audit-logging-and-retention.md): Two-Phase Audit Logging with Cryptographic Argument Redaction
+- [**ADR-015**](docs/decisions/ADR-015-dynamic-tool-dispatch-and-resilience.md): Dynamic Upstream Tool Dispatch, Concurrency Management, and Circuit Breaking
 
 ---
 
-## Next Phase: Phase 4 (Team MCP Gateway Core)
+## Next Phase: Phase 5 (React + Vite Dashboard & Chat UI)
 
-Phase 4 focuses on developing the central **Team MCP Gateway** (`apps/gateway/`):
-1. **Multi-Upstream Aggregation**: Downstream endpoint aggregating WooCommerce, CRM, and Tasks upstreams.
-2. **Tool Namespacing**: Dynamic `{server}__{tool}` prefixing (e.g. `woocommerce__list_products`).
-3. **Failure Isolation & Timeouts**: Per-upstream 10s request aborts; dead upstreams do not crash gateway.
-4. **Stateful SQLite on PVC**: SQLite database with WAL mode on persistent volume (`/data/gateway.db`).
-5. **Dynamic Upstream Management**: Dynamic enable/disable of upstream servers without gateway restarts.
+Phase 5 focuses on developing the operator and team user interface (`apps/dashboard/`):
+1. **Interactive Chat & Tool Execution**: Real-time AI chat interface executing tools via the MCP Gateway.
+2. **Gateway Admin Management**: UI for dynamic upstream configuration, token rotation, and health monitoring.
+3. **Audit Log Inspection**: Filterable audit trail viewer displaying timestamps, users, tool calls, and execution latencies.
+4. **Single-Page Application Ingress**: Served through the gateway ingress at `http://dashboard.127.0.0.1.nip.io:8080/`.
 
-*Implementation is currently on hold awaiting formal Technical Lead & Product Manager authorization.*
 
 
