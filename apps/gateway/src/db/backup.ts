@@ -25,20 +25,53 @@ export function escapeSqlStringLiteral(value: string): string {
 }
 
 /**
+ * Asserts that the SQLite database connection is currently in autocommit mode
+ * (no active transaction), using the native connection transaction-state API.
+ * 
+ * In Node.js 24 LTS node:sqlite, DatabaseSync.prototype.isTransaction returns
+ * true when a transaction (deferred, immediate, or exclusive) is active on the connection,
+ * and false when in autocommit mode.
+ * 
+ * Fails closed if isTransaction is not explicitly false.
+ */
+export function assertAutocommitMode(db: DatabaseSync): void {
+  if (!db) {
+    throw new BackupError('SQLite backup precondition failed: database connection is null or undefined');
+  }
+
+  const isTx = (db as any).isTransaction;
+  if (typeof isTx !== 'boolean') {
+    throw new BackupError(
+      `SQLite backup precondition failed: unable to verify autocommit state (isTransaction property type is ${typeof isTx})`
+    );
+  }
+
+  if (isTx === true) {
+    throw new BackupError(
+      'SQLite backup precondition failed: connection has an active transaction. VACUUM INTO requires autocommit mode.'
+    );
+  }
+}
+
+/**
  * Creates an online, non-locking backup of the SQLite database using VACUUM INTO.
  * 
  * Invariants:
  * 1. Safe online copy that accounts for WAL companion files without locking readers.
- * 2. SQL path literal is safely escaped against injection/apostrophes.
- * 3. Immediately executes PRAGMA integrity_check on the generated snapshot.
- * 4. Enforces strict POSIX permissions: 0700 on backupDir, 0600 on snapshot files.
- * 5. Automatically prunes older backups according to retention limit.
+ * 2. Enforces autocommit precondition (fails closed if connection is in active transaction).
+ * 3. SQL path literal is safely escaped against injection/apostrophes.
+ * 4. Immediately executes PRAGMA integrity_check on the generated snapshot.
+ * 5. Enforces strict POSIX permissions: 0700 on backupDir, 0600 on snapshot files.
+ * 6. Automatically prunes older backups according to retention limit.
  */
 export function backupDatabase(
   db: DatabaseSync,
   backupDir: string,
   retainCount = 7
 ): BackupResult {
+  // Precondition: Fail closed if transaction is active or indeterminate
+  assertAutocommitMode(db);
+
   if (!fs.existsSync(backupDir)) {
     fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
   }

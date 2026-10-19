@@ -9,16 +9,24 @@ WORKDIR /build
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY apps/gateway/package.json ./apps/gateway/
+COPY apps/dashboard/package.json ./apps/dashboard/
 
 # Install full dependencies for building
 RUN npm ci
 
-# Copy TypeScript configuration and source files
+# Copy TypeScript configuration and source files for gateway
 COPY apps/gateway/tsconfig.json ./apps/gateway/
 COPY apps/gateway/src ./apps/gateway/src
 
-# Compile TypeScript
+# Compile Gateway TypeScript
 RUN npm run build --workspace=apps/gateway
+
+# Copy dashboard configuration and source files
+COPY apps/dashboard/tsconfig.json apps/dashboard/vite.config.ts apps/dashboard/index.html ./apps/dashboard/
+COPY apps/dashboard/src ./apps/dashboard/src
+
+# Compile Dashboard Vite SPA
+RUN npm run build --workspace=apps/dashboard
 
 # ==============================================================================
 # Stage 2: Production Dependencies (Excluding devDependencies)
@@ -30,6 +38,7 @@ WORKDIR /build
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY apps/gateway/package.json ./apps/gateway/
+COPY apps/dashboard/package.json ./apps/dashboard/
 
 # Install only production dependencies
 RUN npm ci --omit=dev
@@ -57,6 +66,7 @@ WORKDIR /app
 COPY --from=prod-deps --chown=mcpuser:mcpuser /build/node_modules ./node_modules
 COPY --from=builder --chown=mcpuser:mcpuser /build/apps/gateway/dist ./dist
 COPY --from=builder --chown=mcpuser:mcpuser /build/apps/gateway/package.json ./package.json
+COPY --from=builder --chown=mcpuser:mcpuser /build/apps/dashboard/dist ./dist-dashboard
 
 # Run as non-root user
 USER 10001:10001
@@ -64,10 +74,12 @@ USER 10001:10001
 # Production environment defaults
 ENV NODE_ENV=production \
     PORT=3000 \
+    BROWSER_PORT=3001 \
     HOST=0.0.0.0 \
-    DB_PATH=/data/gateway.db
+    DB_PATH=/data/gateway.db \
+    DASHBOARD_STATIC_PATH=/app/dist-dashboard
 
-EXPOSE 3000
+EXPOSE 3000 3001
 
 VOLUME ["/data"]
 

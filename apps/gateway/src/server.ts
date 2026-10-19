@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import express, { Request, Response, NextFunction } from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -7,6 +9,11 @@ import { Authenticator, FailClosedAuthenticator } from './auth/authenticator.js'
 import { createAuthMiddleware, AuthenticatedRequest } from './auth/middleware.js';
 import { healthHandler, liveHandler, createReadyHandler } from './http/health.js';
 import { createAdminRouter } from './http/admin.js';
+import { createBrowserRouter } from './http/browser.js';
+import { createOriginMiddleware } from './http/browser-middleware.js';
+import { SessionService } from './auth/session-service.js';
+import { UserRepository } from './db/user-repo.js';
+import { ScryptPasswordService } from './auth/scrypt-password-service.js';
 import { logger } from './logging/logger.js';
 
 import {
@@ -323,6 +330,91 @@ export function createExpressApp(options: ServerOptions): express.Application {
       error: err instanceof Error ? err.message : String(err),
     });
 
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  return app;
+}
+
+export interface BrowserServerOptions {
+  config: AppConfig;
+  sessionService: SessionService;
+  userRepo: UserRepository;
+  passwordService: ScryptPasswordService;
+  readinessCheck?: () => boolean;
+}
+
+/**
+ * Creates and configures the Express application for the Port 3001 Browser Listener.
+ * Strictly isolates browser sessions, CSRF protection, and SPA static assets
+ * from the Port 3000 MCP and Private Admin perimeters.
+ */
+export function createBrowserApp(options: BrowserServerOptions): express.Application {
+  const { config, sessionService, userRepo, passwordService } = options;
+  const readinessCheck = options.readinessCheck ?? (() => true);
+
+  const app = express();
+  app.disable('x-powered-by');
+
+  // Operational health probes (always public, no auth required)
+  app.get('/health', healthHandler);
+  app.get('/health/live', liveHandler);
+  app.get('/health/ready', createReadyHandler(readinessCheck));
+
+  // Canonical Origin Allowlist Middleware enforced across all /api/v1/browser routes
+  const allowedOriginsList = config.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+  const originMiddleware = createOriginMiddleware(allowedOriginsList);
+
+  // Bounded JSON body parser enforced on API requests
+  const jsonParser = express.json({
+    limit: config.MAX_PAYLOAD_SIZE_BYTES,
+  });
+
+  const browserRouter = createBrowserRouter({
+    sessionService,
+    userRepo,
+    passwordService,
+    cookieSecure: config.COOKIE_SECURE,
+  });
+
+  // Mount browser API at /api/v1/browser with origin enforcement and json parsing
+  app.use('/api/v1/browser', originMiddleware, jsonParser, browserRouter);
+
+  // Serve Dashboard SPA static files if static bundle directory exists
+  const staticPath = config.DASHBOARD_STATIC_PATH;
+  if (fs.existsSync(staticPath)) {
+    app.use(express.static(staticPath));
+    // SPA fallback: return index.html for non-API client routes
+    app.get('*', (req: Request, res: Response, next: NextFunction): void => {
+      if (
+        req.path.startsWith('/api/') ||
+        req.path.startsWith('/health') ||
+        req.path.startsWith('/admin') ||
+        req.path.startsWith('/mcp')
+      ) {
+        return next();
+      }
+      const indexPath = path.join(staticPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        next();
+      }
+    });
+  }
+
+  // Fallback 404 handler for unmapped routes
+  app.use((_req: Request, res: Response): void => {
+    res.status(404).json({ error: 'Not Found' });
+  });
+
+  // Global error handler
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
+    logger.error('Unhandled browser server error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     if (!res.headersSent) {
       res.status(500).json({ error: 'Internal Server Error' });
     }

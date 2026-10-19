@@ -16,7 +16,7 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # 1. Allow public MCP traffic routed through Traefik ingress controller in kube-system
+    # 1. Allow public MCP traffic and browser dashboard traffic routed through Traefik ingress controller in kube-system
     - from:
         - namespaceSelector:
             matchLabels:
@@ -27,6 +27,8 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.gateway.service.port | default 3000 }}
+        - protocol: TCP
+          port: {{ .Values.gateway.browserPort | default 3001 }}
     {{- if .Values.networkPolicy.allowTestClient }}
     # 2. Explicitly local-only exception for development verification
     - from:

@@ -13,6 +13,10 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    - port: {{ .Values.gateway.browserPort | default 3001 }}
+      targetPort: browser
+      protocol: TCP
+      name: browser
   selector:
     app.kubernetes.io/name: {{ include "urumi-platform.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}

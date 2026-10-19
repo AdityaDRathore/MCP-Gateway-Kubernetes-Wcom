@@ -1,7 +1,11 @@
 import { loadConfig } from './config.js';
-import { createExpressApp } from './server.js';
+import { createExpressApp, createBrowserApp } from './server.js';
 import { LifecycleManager } from './lifecycle.js';
 import { logger } from './logging/logger.js';
+import { UserRepository } from './db/user-repo.js';
+import { SessionRepository } from './db/session-repo.js';
+import { ScryptPasswordService } from './auth/scrypt-password-service.js';
+import { SessionService } from './auth/session-service.js';
 
 // Load and validate environment configuration, failing fast on invalid values
 const config = loadConfig(process.env, true);
@@ -95,6 +99,12 @@ try {
   });
 }
 
+// Instantiate Browser Auth & Session Management
+const userRepo = new UserRepository(dbManager.getDb());
+const sessionRepo = new SessionRepository(dbManager.getDb());
+const passwordService = new ScryptPasswordService();
+const sessionService = new SessionService(sessionRepo, userRepo);
+
 const app = createExpressApp({
   config,
   authenticator,
@@ -104,7 +114,15 @@ const app = createExpressApp({
   readinessCheck: () => dbManager.isHealthy(),
 });
 
-const server = app.listen(config.PORT, config.HOST, () => {
+const browserApp = createBrowserApp({
+  config,
+  sessionService,
+  userRepo,
+  passwordService,
+  readinessCheck: () => dbManager.isHealthy(),
+});
+
+const mcpServer = app.listen(config.PORT, config.HOST, () => {
   logger.info(`Urumi Team MCP Gateway listening on http://${config.HOST}:${config.PORT}`, {
     port: config.PORT,
     host: config.HOST,
@@ -115,7 +133,17 @@ const server = app.listen(config.PORT, config.HOST, () => {
   });
 });
 
-const lifecycle = new LifecycleManager(server, config);
+const browserServer = browserApp.listen(config.BROWSER_PORT, config.HOST, () => {
+  logger.info(`Urumi Dashboard & Browser API listening on http://${config.HOST}:${config.BROWSER_PORT}`, {
+    port: config.BROWSER_PORT,
+    host: config.HOST,
+    allowedOrigins: config.ALLOWED_ORIGINS,
+    cookieSecure: config.COOKIE_SECURE,
+    dashboardStaticPath: config.DASHBOARD_STATIC_PATH,
+  });
+});
+
+const lifecycle = new LifecycleManager([mcpServer, browserServer], config);
 lifecycle.registerCleanupHook(() => {
   logger.info('Closing tool router during shutdown');
   toolRouter.close();

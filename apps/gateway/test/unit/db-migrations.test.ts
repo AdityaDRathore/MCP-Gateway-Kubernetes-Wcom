@@ -85,6 +85,32 @@ describe('Gateway SQLite Schema Migrations Unit Tests', () => {
     db.close();
   });
 
+  it('additive Migration 003 introduces password_hash, sessions and invitations tables', () => {
+    const db = new DatabaseSync(':memory:');
+    runMigrations(db, MIGRATIONS);
+
+    // Verify users columns
+    const userCols = db.prepare("PRAGMA table_info(users);").all() as { name: string }[];
+    const colNames = userCols.map((c) => c.name);
+    assert(colNames.includes('password_hash'));
+    assert(colNames.includes('status'));
+    assert(colNames.includes('updated_at'));
+
+    // Verify sessions and invitations tables exist
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions';").get(), undefined);
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='invitations';").get(), undefined);
+
+    // Verify status CHECK constraint on users
+    assert.throws(() => {
+      db.prepare(`
+        INSERT INTO users (id, username, role, created_at, status)
+        VALUES ('u1', 'bad_user', 'member', 1000, 'invalid_status');
+      `).run();
+    }, /CHECK constraint failed/);
+
+    db.close();
+  });
+
   it('is idempotent when run repeatedly against up-to-date schema', () => {
     const db = new DatabaseSync(':memory:');
 

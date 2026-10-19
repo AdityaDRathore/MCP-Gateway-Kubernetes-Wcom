@@ -4,7 +4,7 @@ import { AppConfig } from './config.js';
 import { logger } from './logging/logger.js';
 
 export class LifecycleManager {
-  private server: http.Server;
+  private servers: http.Server[];
   private config: AppConfig;
   private sockets = new Set<Socket>();
   private isShuttingDown = false;
@@ -12,11 +12,11 @@ export class LifecycleManager {
   private cleanupHooks: (() => Promise<void> | void)[] = [];
 
   constructor(
-    server: http.Server,
+    server: http.Server | http.Server[],
     config: AppConfig,
     exitHandler: (code: number) => void = (code) => process.exit(code)
   ) {
-    this.server = server;
+    this.servers = Array.isArray(server) ? server : [server];
     this.config = config;
     this.exitHandler = exitHandler;
 
@@ -28,12 +28,14 @@ export class LifecycleManager {
   }
 
   private trackConnections(): void {
-    this.server.on('connection', (socket: Socket) => {
-      this.sockets.add(socket);
-      socket.on('close', () => {
-        this.sockets.delete(socket);
+    for (const s of this.servers) {
+      s.on('connection', (socket: Socket) => {
+        this.sockets.add(socket);
+        socket.on('close', () => {
+          this.sockets.delete(socket);
+        });
       });
-    });
+    }
   }
 
   /**
@@ -53,7 +55,7 @@ export class LifecycleManager {
   }
 
   /**
-   * Gracefully shuts down the HTTP server within the configured drain deadline.
+   * Gracefully shuts down all HTTP servers within the configured drain deadline.
    */
   stop(): Promise<void> {
     if (this.isShuttingDown) {
@@ -90,8 +92,10 @@ export class LifecycleManager {
           lingeringConnections: this.sockets.size,
         });
 
-        if (typeof (this.server as any).closeAllConnections === 'function') {
-          (this.server as any).closeAllConnections();
+        for (const s of this.servers) {
+          if (typeof (s as any).closeAllConnections === 'function') {
+            (s as any).closeAllConnections();
+          }
         }
 
         for (const socket of this.sockets) {
@@ -111,15 +115,31 @@ export class LifecycleManager {
         forceTimer.unref();
       }
 
-      this.server.close((err?: Error) => {
-        if (err) {
-          logger.error('Error during server.close()', { error: err.message });
-          finish(1);
-        } else {
-          logger.info('HTTP server closed cleanly, all in-flight connections drained');
-          finish(0);
-        }
-      });
+      if (this.servers.length === 0) {
+        finish(0);
+        return;
+      }
+
+      let closedCount = 0;
+      let hasError = false;
+
+      for (const server of this.servers) {
+        server.close((err?: Error) => {
+          closedCount++;
+          if (err) {
+            logger.error('Error during server.close()', { error: err.message });
+            hasError = true;
+          }
+          if (closedCount === this.servers.length) {
+            if (hasError) {
+              finish(1);
+            } else {
+              logger.info('All HTTP servers closed cleanly, all in-flight connections drained');
+              finish(0);
+            }
+          }
+        });
+      }
     });
   }
 

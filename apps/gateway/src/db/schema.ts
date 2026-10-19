@@ -81,7 +81,47 @@ export const migration002: Migration = {
   `,
 };
 
+export const migration003: Migration = {
+  version: 3,
+  name: '003_dashboard_auth_and_sessions',
+  sql: `
+    ALTER TABLE users ADD COLUMN password_hash TEXT;
+    ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'deactivated'));
+    ALTER TABLE users ADD COLUMN updated_at INTEGER;
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT UNIQUE NOT NULL,
+      csrf_token TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      last_active_at INTEGER NOT NULL,
+      user_agent TEXT,
+      ip_address TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+
+    CREATE TABLE IF NOT EXISTS invitations (
+      id TEXT PRIMARY KEY,
+      token_hash TEXT UNIQUE NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('admin', 'member')),
+      created_by TEXT NOT NULL REFERENCES users(id),
+      expires_at INTEGER NOT NULL,
+      redeemed_at INTEGER,
+      redeemed_by TEXT REFERENCES users(id),
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_invitations_token_hash ON invitations(token_hash);
+  `,
+};
+
 export const MIGRATIONS: Migration[] = [
   migration001,
   migration002,
+  migration003,
 ];
+

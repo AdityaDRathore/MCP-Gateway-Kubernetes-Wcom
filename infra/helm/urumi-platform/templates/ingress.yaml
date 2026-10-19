@@ -62,4 +62,11 @@ spec:
                 name: urumi-gateway
                 port:
                   number: {{ .Values.gateway.service.port | default 3000 }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: urumi-gateway
+                port:
+                  number: {{ .Values.gateway.browserPort | default 3001 }}
 {{- end }}

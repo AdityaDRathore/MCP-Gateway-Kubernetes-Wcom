@@ -42,6 +42,9 @@ gateway:
   image: "urumi-gateway:1.0.0"
   digest: ""
   imagePullPolicy: "IfNotPresent"
+  browserPort: 3001
+  cookieSecure: true
+  allowedOrigins: "https://app.urumi-demo.com"
   # Single replica is strictly required when using SQLite on ReadWriteOnce PVC (/data/gateway.db)
   # to prevent database locking and multi-writer corruption.
   k8sApiClusterIp: "10.43.0.1/32"
