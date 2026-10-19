@@ -119,6 +119,8 @@ const browserApp = createBrowserApp({
   sessionService,
   userRepo,
   passwordService,
+  adminService,
+  catalogService,
   readinessCheck: () => dbManager.isHealthy(),
 });
 

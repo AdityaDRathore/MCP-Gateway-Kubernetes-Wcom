@@ -343,6 +343,8 @@ export interface BrowserServerOptions {
   sessionService: SessionService;
   userRepo: UserRepository;
   passwordService: ScryptPasswordService;
+  adminService?: AdminService;
+  catalogService?: CatalogService;
   readinessCheck?: () => boolean;
 }
 
@@ -380,6 +382,8 @@ export function createBrowserApp(options: BrowserServerOptions): express.Applica
     passwordService,
     cookieSecure: config.COOKIE_SECURE,
     trustedProxies: trustedProxiesList,
+    adminService: options.adminService,
+    catalogService: options.catalogService,
   });
 
   // Mount browser API at /api/v1/browser with origin enforcement and json parsing

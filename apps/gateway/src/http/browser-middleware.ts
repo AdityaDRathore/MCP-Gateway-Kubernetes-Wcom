@@ -202,3 +202,31 @@ export function createCsrfMiddleware() {
     next();
   };
 }
+
+/**
+ * Creates role authorization middleware for authenticated browser endpoints.
+ * Requires user to have one of the specified roles (e.g. 'admin').
+ */
+export function requireRole(...allowedRoles: ('admin' | 'member')[]) {
+  return (req: BrowserRequest, res: Response, next: NextFunction): void => {
+    const user = req.sessionContext?.user;
+    if (!user) {
+      res.status(401).json({
+        error: 'Unauthorized: Session required',
+        code: 'SESSION_REQUIRED',
+      });
+      return;
+    }
+
+    if (!allowedRoles.includes(user.role)) {
+      res.status(403).json({
+        error: 'Forbidden: Insufficient privileges',
+        code: 'FORBIDDEN',
+      });
+      return;
+    }
+
+    next();
+  };
+}
+
