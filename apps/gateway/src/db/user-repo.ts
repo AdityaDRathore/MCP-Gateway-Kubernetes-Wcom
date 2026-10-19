@@ -4,51 +4,51 @@ export interface UserEntity {
   id: string;
   username: string;
   role: 'admin' | 'member';
-  status: 'active' | 'deactivated';
-  password_hash: string | null;
+  is_active: number; // 1 = active, 0 = deactivated
   created_at: number;
-  updated_at: number | null;
+}
+
+export interface UserCredentialsEntity {
+  user_id: string;
+  password_hash: string;
+  algorithm: string;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface CreateUserInput {
   id: string;
   username: string;
   role: 'admin' | 'member';
-  status?: 'active' | 'deactivated';
-  password_hash?: string | null;
+  is_active?: number;
   created_at?: number;
-  updated_at?: number | null;
 }
 
 export class UserRepository {
   constructor(private db: DatabaseSync) {}
 
   insertUser(user: CreateUserInput): UserEntity {
-    const status = user.status ?? 'active';
+    const isActive = user.is_active ?? 1;
     const createdAt = user.created_at ?? Math.floor(Date.now() / 1000);
-    const updatedAt = user.updated_at ?? createdAt;
-    const passwordHash = user.password_hash ?? null;
 
     const stmt = this.db.prepare(`
-      INSERT INTO users (id, username, role, status, password_hash, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?);
+      INSERT INTO users (id, username, role, is_active, created_at)
+      VALUES (?, ?, ?, ?, ?);
     `);
-    stmt.run(user.id, user.username, user.role, status, passwordHash, createdAt, updatedAt);
+    stmt.run(user.id, user.username, user.role, isActive, createdAt);
 
     return {
       id: user.id,
       username: user.username,
       role: user.role,
-      status,
-      password_hash: passwordHash,
+      is_active: isActive,
       created_at: createdAt,
-      updated_at: updatedAt,
     };
   }
 
   findUserById(id: string): UserEntity | null {
     const stmt = this.db.prepare(`
-      SELECT id, username, role, status, password_hash, created_at, updated_at
+      SELECT id, username, role, is_active, created_at
       FROM users
       WHERE id = ?;
     `);
@@ -58,7 +58,7 @@ export class UserRepository {
 
   findUserByUsername(username: string): UserEntity | null {
     const stmt = this.db.prepare(`
-      SELECT id, username, role, status, password_hash, created_at, updated_at
+      SELECT id, username, role, is_active, created_at
       FROM users
       WHERE username = ?;
     `);
@@ -66,29 +66,41 @@ export class UserRepository {
     return row ?? null;
   }
 
-  updatePassword(userId: string, passwordHash: string): void {
-    const now = Math.floor(Date.now() / 1000);
+  getUserCredentials(userId: string): UserCredentialsEntity | null {
     const stmt = this.db.prepare(`
-      UPDATE users
-      SET password_hash = ?, updated_at = ?
-      WHERE id = ?;
+      SELECT user_id, password_hash, algorithm, created_at, updated_at
+      FROM user_credentials
+      WHERE user_id = ?;
     `);
-    stmt.run(passwordHash, now, userId);
+    const row = stmt.get(userId) as UserCredentialsEntity | undefined;
+    return row ?? null;
   }
 
-  updateStatus(userId: string, status: 'active' | 'deactivated'): void {
+  setUserCredentials(userId: string, passwordHash: string, algorithm = 'scrypt_v1'): void {
     const now = Math.floor(Date.now() / 1000);
     const stmt = this.db.prepare(`
+      INSERT INTO user_credentials (user_id, password_hash, algorithm, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        password_hash = excluded.password_hash,
+        algorithm = excluded.algorithm,
+        updated_at = excluded.updated_at;
+    `);
+    stmt.run(userId, passwordHash, algorithm, now, now);
+  }
+
+  updateActiveStatus(userId: string, isActive: number): void {
+    const stmt = this.db.prepare(`
       UPDATE users
-      SET status = ?, updated_at = ?
+      SET is_active = ?
       WHERE id = ?;
     `);
-    stmt.run(status, now, userId);
+    stmt.run(isActive, userId);
   }
 
   listUsers(): UserEntity[] {
     const stmt = this.db.prepare(`
-      SELECT id, username, role, status, password_hash, created_at, updated_at
+      SELECT id, username, role, is_active, created_at
       FROM users
       ORDER BY created_at ASC;
     `);

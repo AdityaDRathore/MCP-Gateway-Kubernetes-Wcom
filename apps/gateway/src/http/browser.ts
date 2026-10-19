@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { SessionService, SESSION_COOKIE_NAME } from '../auth/session-service.js';
 import { UserRepository } from '../db/user-repo.js';
 import { ScryptPasswordService } from '../auth/scrypt-password-service.js';
+import { LoginRateLimiter } from '../auth/login-rate-limiter.js';
+import { getClientIp } from './client-ip.js';
 import {
   createSessionAuthMiddleware,
   createCsrfMiddleware,
@@ -16,21 +18,29 @@ const LoginRequestSchema = z.object({
   password: z.string().min(1, 'Password is required'),
 });
 
+const DUMMY_SCRYPT_HASH =
+  'scrypt$v1$N=16384,r=8,p=1$0000000000000000000000000000000000000000000000000000000000000000$00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
+
 export interface BrowserRouterOptions {
   sessionService: SessionService;
   userRepo: UserRepository;
   passwordService: ScryptPasswordService;
   cookieSecure: boolean;
+  trustedProxies?: string[];
+  rateLimiter?: LoginRateLimiter;
 }
 
 export function createBrowserRouter(options: BrowserRouterOptions): Router {
   const router = Router();
   const sessionAuth = createSessionAuthMiddleware(options.sessionService);
   const csrfAuth = createCsrfMiddleware();
+  const rateLimiter = options.rateLimiter ?? new LoginRateLimiter();
+  const trustedProxies = options.trustedProxies ?? ['127.0.0.1', '::1', '10.42.0.0/16', '10.43.0.0/16'];
 
   /**
    * POST /api/v1/browser/session
-   * Establishes a new authenticated browser session.
+   * Establishes a new authenticated browser session with rate limiting,
+   * constant-time dummy verification, and generic error responses.
    */
   router.post('/session', async (req: Request, res: Response): Promise<void> => {
     const parseResult = LoginRequestSchema.safeParse(req.body);
@@ -43,39 +53,62 @@ export function createBrowserRouter(options: BrowserRouterOptions): Router {
     }
 
     const { username, password } = parseResult.data;
+    const clientIp = getClientIp(req, trustedProxies);
+
+    // 1. Sliding window rate limit check
+    const rateLimitStatus = rateLimiter.checkLimit(clientIp, username);
+    if (rateLimitStatus.limited) {
+      res.set('Retry-After', String(rateLimitStatus.retryAfterSeconds));
+      res.status(429).json({
+        error: 'Too many failed login attempts. Please try again later.',
+        code: 'LOGIN_RATE_LIMITED',
+      });
+      return;
+    }
+
     const user = options.userRepo.findUserByUsername(username);
+    const credentials = user ? options.userRepo.getUserCredentials(user.id) : null;
 
-    if (!user || !user.password_hash) {
-      // Constant-time dummy verify to mitigate username enumeration timing
-      await options.passwordService.verifyPassword(
-        password,
-        '$scrypt$N=16384,r=8,p=1$00000000000000000000000000000000$0000000000000000000000000000000000000000000000000000000000000000'
-      );
+    // 2. Generic failure path for nonexistent user, missing credentials, or inactive user
+    if (!user || !credentials || user.is_active !== 1) {
+      // Execute constant-time dummy Scrypt verification to prevent user enumeration via timing
+      try {
+        await options.passwordService.verifyPassword(password, DUMMY_SCRYPT_HASH);
+      } catch {
+        // Ignore dummy verify error
+      }
+
+      rateLimiter.recordFailure(clientIp, username);
       res.status(401).json({
-        error: 'Unauthorized: Invalid username or password',
+        error: 'Invalid username or password',
         code: 'INVALID_CREDENTIALS',
       });
       return;
     }
 
-    if (user.status !== 'active') {
-      res.status(401).json({
-        error: 'Unauthorized: Account is deactivated',
-        code: 'ACCOUNT_DEACTIVATED',
+    // 3. User is active and credentials exist — verify password
+    let isValidPassword = false;
+    try {
+      isValidPassword = await options.passwordService.verifyPassword(password, credentials.password_hash);
+    } catch (err: unknown) {
+      logger.error('Error during password verification', {
+        userId: user.id,
+        error: err instanceof Error ? err.message : String(err),
       });
-      return;
+      isValidPassword = false;
     }
 
-    const isValidPassword = await options.passwordService.verifyPassword(password, user.password_hash);
     if (!isValidPassword) {
+      rateLimiter.recordFailure(clientIp, username);
       res.status(401).json({
-        error: 'Unauthorized: Invalid username or password',
+        error: 'Invalid username or password',
         code: 'INVALID_CREDENTIALS',
       });
       return;
     }
 
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress;
+    // 4. Successful authentication: clear failure count, create session
+    rateLimiter.recordSuccess(clientIp, username);
     const userAgent = req.headers['user-agent'];
 
     try {
@@ -118,7 +151,7 @@ export function createBrowserRouter(options: BrowserRouterOptions): Router {
         username: user.username,
         role: user.role,
       },
-      csrfToken: session.csrf_token,
+      csrfToken: session.csrf_secret,
     });
   });
 

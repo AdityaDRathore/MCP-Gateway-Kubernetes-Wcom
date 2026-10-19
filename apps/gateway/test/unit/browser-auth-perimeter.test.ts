@@ -42,27 +42,27 @@ describe('Dual-Listener Security Perimeter Protocol Tests (DEC-02 / DEC-04)', ()
       id: 'usr-admin-1',
       username: 'admin',
       role: 'admin',
-      status: 'active',
-      password_hash: adminPasswordHash,
+      is_active: 1,
     });
+    userRepo.setUserCredentials('usr-admin-1', adminPasswordHash);
 
     const memberPasswordHash = await passwordService.hashPassword('MemberPassword123!');
     userRepo.insertUser({
       id: 'usr-member-1',
       username: 'member',
       role: 'member',
-      status: 'active',
-      password_hash: memberPasswordHash,
+      is_active: 1,
     });
+    userRepo.setUserCredentials('usr-member-1', memberPasswordHash);
 
     const deactPasswordHash = await passwordService.hashPassword('DeactPassword123!');
     userRepo.insertUser({
       id: 'usr-deact-1',
       username: 'deactivated',
       role: 'member',
-      status: 'deactivated',
-      password_hash: deactPasswordHash,
+      is_active: 0,
     });
+    userRepo.setUserCredentials('usr-deact-1', deactPasswordHash);
 
     const config = parseConfig({
       PORT: '3000',
@@ -70,6 +70,7 @@ describe('Dual-Listener Security Perimeter Protocol Tests (DEC-02 / DEC-04)', ()
       ALLOWED_ORIGINS: allowedOrigin,
       COOKIE_SECURE: 'false',
       DASHBOARD_STATIC_PATH: path.resolve(process.cwd(), '../dashboard/dist'),
+      TRUSTED_PROXIES: '127.0.0.1,::1',
     });
 
     const mcpApp = createExpressApp({ config });
@@ -125,7 +126,7 @@ describe('Dual-Listener Security Perimeter Protocol Tests (DEC-02 / DEC-04)', ()
     assert.strictEqual(data.code, 'CSRF_ORIGIN_FORBIDDEN');
   });
 
-  it('rejects login on Port 3001 with invalid credentials', async () => {
+  it('rejects login on Port 3001 with generic error for invalid credentials', async () => {
     const res = await fetch(`http://127.0.0.1:${browserPort}/api/v1/browser/session`, {
       method: 'POST',
       headers: {
@@ -137,10 +138,13 @@ describe('Dual-Listener Security Perimeter Protocol Tests (DEC-02 / DEC-04)', ()
 
     assert.strictEqual(res.status, 401);
     const data = await res.json();
-    assert.strictEqual(data.code, 'INVALID_CREDENTIALS');
+    assert.deepStrictEqual(data, {
+      error: 'Invalid username or password',
+      code: 'INVALID_CREDENTIALS',
+    });
   });
 
-  it('rejects login on Port 3001 for deactivated accounts', async () => {
+  it('rejects login on Port 3001 with identical generic error for deactivated accounts (zero user enumeration)', async () => {
     const res = await fetch(`http://127.0.0.1:${browserPort}/api/v1/browser/session`, {
       method: 'POST',
       headers: {
@@ -152,7 +156,10 @@ describe('Dual-Listener Security Perimeter Protocol Tests (DEC-02 / DEC-04)', ()
 
     assert.strictEqual(res.status, 401);
     const data = await res.json();
-    assert.strictEqual(data.code, 'ACCOUNT_DEACTIVATED');
+    assert.deepStrictEqual(data, {
+      error: 'Invalid username or password',
+      code: 'INVALID_CREDENTIALS',
+    });
   });
 
   it('completes full browser session lifecycle (login -> get session -> logout)', async () => {

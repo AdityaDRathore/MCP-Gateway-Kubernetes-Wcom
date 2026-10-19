@@ -78,4 +78,23 @@ describe('ScryptPasswordService Unit Tests (DEC-03)', () => {
     assert.strictEqual(finalMetrics.active, 0);
     assert.strictEqual(finalMetrics.queued, 0);
   });
+
+  it('fails closed with ScryptConcurrencyError when queue timeout is exceeded under load', async () => {
+    // 1 concurrent slot, 10ms queue timeout
+    const tightService = new ScryptPasswordService({ maxConcurrent: 1, queueTimeoutMs: 10 });
+
+    // Launch operation that will occupy the slot
+    const p1 = tightService.hashPassword('first-password');
+
+    // Launch second and third operations that will wait in queue longer than 10ms
+    const p2 = tightService.hashPassword('second-password');
+    const p3 = tightService.hashPassword('third-password');
+
+    // At least one of p2 or p3 must reject with ScryptConcurrencyError if queue wait exceeds 10ms
+    const results = await Promise.allSettled([p1, p2, p3]);
+    const rejected = results.filter((r) => r.status === 'rejected');
+    assert(rejected.length > 0, 'Expected at least one operation to reject on queue timeout');
+    const err = (rejected[0] as PromiseRejectedResult).reason;
+    assert.strictEqual(err.name, 'ScryptConcurrencyError');
+  });
 });

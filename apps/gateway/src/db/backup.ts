@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { logger } from '../logging/logger.js';
 
@@ -10,8 +11,24 @@ export class BackupError extends Error {
   }
 }
 
+export interface BackupManifest {
+  backupId: string;
+  backupFileName: string;
+  manifestFileName: string;
+  timestamp: string;
+  createdAtUnix: number;
+  sha256: string;
+  sizeBytes: number;
+  schemaVersion: number;
+  integrityCheck: string;
+  foreignKeyCheck: string;
+  rowCounts: Record<string, number>;
+}
+
 export interface BackupResult {
   backupPath: string;
+  manifestPath: string;
+  manifest: BackupManifest;
   timestamp: string;
   sizeBytes: number;
 }
@@ -54,15 +71,39 @@ export function assertAutocommitMode(db: DatabaseSync): void {
 }
 
 /**
- * Creates an online, non-locking backup of the SQLite database using VACUUM INTO.
- * 
- * Invariants:
- * 1. Safe online copy that accounts for WAL companion files without locking readers.
- * 2. Enforces autocommit precondition (fails closed if connection is in active transaction).
- * 3. SQL path literal is safely escaped against injection/apostrophes.
- * 4. Immediately executes PRAGMA integrity_check on the generated snapshot.
- * 5. Enforces strict POSIX permissions: 0700 on backupDir, 0600 on snapshot files.
- * 6. Automatically prunes older backups according to retention limit.
+ * Collects row counts for all known application tables that exist in the database.
+ */
+export function getTableRowCounts(database: DatabaseSync): Record<string, number> {
+  const counts: Record<string, number> = {};
+  const tables = [
+    'users',
+    'api_keys',
+    'upstreams',
+    'audit_logs',
+    'user_credentials',
+    'browser_sessions',
+    'user_invitations',
+  ];
+
+  for (const tbl of tables) {
+    const tableExists = database
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?;")
+      .get(tbl);
+    if (tableExists) {
+      const countRow = database
+        .prepare(`SELECT count(*) as count FROM ${tbl};`)
+        .get() as { count: number } | undefined;
+      counts[tbl] = countRow?.count ?? 0;
+    }
+  }
+  return counts;
+}
+
+/**
+ * Creates an atomic WAL-consistent backup of the SQLite database using VACUUM INTO,
+ * generates a verified backup manifest (unique ID, SHA-256 checksum, row-count preservation,
+ * PRAGMA integrity_check, PRAGMA foreign_key_check), enforces 0700/0600 POSIX permissions,
+ * and prunes older backups.
  */
 export function backupDatabase(
   db: DatabaseSync,
@@ -75,7 +116,6 @@ export function backupDatabase(
   if (!fs.existsSync(backupDir)) {
     fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
   }
-  // Enforce 0700 on existing or newly created backup directory
   try {
     fs.chmodSync(backupDir, 0o700);
   } catch (err: unknown) {
@@ -85,58 +125,124 @@ export function backupDatabase(
     });
   }
 
+  // Baseline row counts from source database prior to backup
+  const sourceRowCounts = getTableRowCounts(db);
+
+  const backupId = crypto.randomUUID();
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupFileName = `gateway-${timestamp}.db`;
+  const filePrefix = `gateway-${timestamp}-${backupId.slice(0, 8)}`;
+  const backupFileName = `${filePrefix}.db`;
+  const manifestFileName = `${filePrefix}.manifest.json`;
   const backupPath = path.join(backupDir, backupFileName);
+  const manifestPath = path.join(backupDir, manifestFileName);
 
   try {
-    // 1. Snapshot database using SQLite VACUUM INTO with safely escaped path
+    // 1. Snapshot database using SQLite VACUUM INTO
     const escapedPath = escapeSqlStringLiteral(backupPath);
     db.exec(`VACUUM INTO '${escapedPath}';`);
-
-    // Enforce 0600 permissions immediately on the created snapshot
     fs.chmodSync(backupPath, 0o600);
 
-    // 2. Immediate Integrity Verification of Snapshot
+    const stats = fs.statSync(backupPath);
+
+    // 2. Compute SHA-256 Checksum of the snapshot file
+    const fileBuffer = fs.readFileSync(backupPath);
+    const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+    // 3. Open snapshot connection for integrity & foreign-key verification
     const verifyDb = new DatabaseSync(backupPath);
     let integrityCheck = 'unknown';
+    let fkViolationsCount = 0;
+    let schemaVersion = 0;
+    let backupRowCounts: Record<string, number> = {};
+
     try {
+      // 3a. Integrity check
       const integrityRow = verifyDb.prepare('PRAGMA integrity_check;').get() as { integrity_check?: string } | undefined;
       integrityCheck = integrityRow?.integrity_check ?? 'failed';
+
+      // 3b. Foreign key verification
+      const fkRows = verifyDb.prepare('PRAGMA foreign_key_check;').all() as unknown[];
+      fkViolationsCount = fkRows.length;
+
+      // 3c. Schema user_version
+      const versionRow = verifyDb.prepare('PRAGMA user_version;').get() as { user_version?: number } | undefined;
+      schemaVersion = versionRow?.user_version ?? 0;
+
+      // 3d. Verify row count preservation
+      backupRowCounts = getTableRowCounts(verifyDb);
     } finally {
       verifyDb.close();
     }
 
+    // Fail closed on integrity violation
     if (integrityCheck !== 'ok') {
-      try {
-        fs.unlinkSync(backupPath);
-      } catch {
-        // Ignore unlink failure
-      }
       throw new BackupError(`Backup integrity check failed: ${integrityCheck}`);
     }
 
-    const stats = fs.statSync(backupPath);
+    // Fail closed on foreign key violation
+    if (fkViolationsCount > 0) {
+      throw new BackupError(`Backup foreign key check failed with ${fkViolationsCount} violations`);
+    }
 
-    // 3. Prune Old Backups
+    // Fail closed on row count mismatch
+    for (const [tbl, expectedCount] of Object.entries(sourceRowCounts)) {
+      const actualCount = backupRowCounts[tbl];
+      if (actualCount !== expectedCount) {
+        throw new BackupError(
+          `Backup row count mismatch for table '${tbl}': expected ${expectedCount}, got ${actualCount}`
+        );
+      }
+    }
+
+    // 4. Generate and write Backup Manifest
+    const manifest: BackupManifest = {
+      backupId,
+      backupFileName,
+      manifestFileName,
+      timestamp,
+      createdAtUnix: Math.floor(Date.now() / 1000),
+      sha256,
+      sizeBytes: stats.size,
+      schemaVersion,
+      integrityCheck,
+      foreignKeyCheck: fkViolationsCount === 0 ? 'ok' : 'failed',
+      rowCounts: backupRowCounts,
+    };
+
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), { mode: 0o600 });
+    fs.chmodSync(manifestPath, 0o600);
+
+    // 5. Prune Old Backups and companion manifests
     pruneBackups(backupDir, retainCount);
 
-    logger.info('Database backup completed successfully', {
+    logger.info('Database backup and manifest generated successfully', {
+      backupId,
       backupPath,
+      manifestPath,
+      sha256,
       sizeBytes: stats.size,
       integrityCheck,
     });
 
     return {
       backupPath,
+      manifestPath,
+      manifest,
       timestamp,
       sizeBytes: stats.size,
     };
   } catch (err: unknown) {
-    // If backup file exists on failure, attempt cleanup
+    // Clean up created files on failure
     if (fs.existsSync(backupPath)) {
       try {
         fs.unlinkSync(backupPath);
+      } catch {
+        // Ignore
+      }
+    }
+    if (fs.existsSync(manifestPath)) {
+      try {
+        fs.unlinkSync(manifestPath);
       } catch {
         // Ignore
       }
@@ -152,14 +258,16 @@ export function backupDatabase(
 }
 
 /**
- * Prunes older database backups, retaining the most recent `retainCount` snapshots.
+ * Prunes older database backups and their companion manifest files,
+ * retaining the most recent `retainCount` snapshots.
  */
 export function pruneBackups(backupDir: string, retainCount = 7): string[] {
   if (!fs.existsSync(backupDir)) {
     return [];
   }
 
-  const files = fs.readdirSync(backupDir)
+  const files = fs
+    .readdirSync(backupDir)
     .filter((file) => file.startsWith('gateway-') && file.endsWith('.db'))
     .map((file) => ({
       name: file,
@@ -175,6 +283,13 @@ export function pruneBackups(backupDir: string, retainCount = 7): string[] {
       try {
         fs.unlinkSync(f.fullPath);
         removed.push(f.fullPath);
+
+        // Also remove companion manifest file if present
+        const manifestCandidate = f.fullPath.replace(/\.db$/, '.manifest.json');
+        if (fs.existsSync(manifestCandidate)) {
+          fs.unlinkSync(manifestCandidate);
+          removed.push(manifestCandidate);
+        }
       } catch (err: unknown) {
         logger.warn('Failed to prune old backup file', {
           file: f.fullPath,

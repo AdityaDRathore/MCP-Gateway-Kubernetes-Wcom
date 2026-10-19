@@ -83,39 +83,50 @@ export const migration002: Migration = {
 
 export const migration003: Migration = {
   version: 3,
-  name: '003_dashboard_auth_and_sessions',
+  name: '003_browser_identity_and_sessions',
   sql: `
-    ALTER TABLE users ADD COLUMN password_hash TEXT;
-    ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'deactivated'));
-    ALTER TABLE users ADD COLUMN updated_at INTEGER;
+    -- 1. Add active status tracking to existing users table
+    ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0, 1));
 
-    CREATE TABLE IF NOT EXISTS sessions (
+    -- 2. User Credentials table storing Scrypt password verifiers
+    CREATE TABLE IF NOT EXISTS user_credentials (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      password_hash TEXT NOT NULL,
+      algorithm TEXT NOT NULL DEFAULT 'scrypt_v1',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    -- 3. Browser Sessions table storing SHA-256 hashed session tokens
+    CREATE TABLE IF NOT EXISTS browser_sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       token_hash TEXT UNIQUE NOT NULL,
-      csrf_token TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL,
-      last_active_at INTEGER NOT NULL,
+      csrf_secret TEXT NOT NULL,
+      ip_address TEXT,
       user_agent TEXT,
-      ip_address TEXT
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      last_activity_at INTEGER NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
-    CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON browser_sessions(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON browser_sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON browser_sessions(expires_at);
 
-    CREATE TABLE IF NOT EXISTS invitations (
+    -- 4. Single-use invitation tokens
+    CREATE TABLE IF NOT EXISTS user_invitations (
       id TEXT PRIMARY KEY,
       token_hash TEXT UNIQUE NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('admin', 'member')),
-      created_by TEXT NOT NULL REFERENCES users(id),
+      invited_by TEXT REFERENCES users(id),
       expires_at INTEGER NOT NULL,
       redeemed_at INTEGER,
-      redeemed_by TEXT REFERENCES users(id),
+      redeemed_by_user_id TEXT REFERENCES users(id),
       created_at INTEGER NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_invitations_token_hash ON invitations(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_invitations_token_hash ON user_invitations(token_hash);
   `,
 };
 

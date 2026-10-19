@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { SessionRepository, SessionRecord } from '../db/session-repo.js';
+import { SessionRepository, BrowserSessionRecord } from '../db/session-repo.js';
 import { UserRepository, UserEntity } from '../db/user-repo.js';
 
 export const IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes sliding window
@@ -7,13 +7,13 @@ export const ABSOLUTE_LIFETIME_MS = 24 * 60 * 60 * 1000; // 24 hours absolute ma
 export const SESSION_COOKIE_NAME = 'urumi_session';
 
 export interface CreateSessionResult {
-  session: SessionRecord;
+  session: BrowserSessionRecord;
   rawToken: string;
   csrfToken: string;
 }
 
 export interface AuthenticatedSession {
-  session: SessionRecord;
+  session: BrowserSessionRecord;
   user: UserEntity;
 }
 
@@ -53,28 +53,28 @@ export class SessionService {
     if (!user) {
       throw new Error(`Cannot create session: User '${userId}' does not exist`);
     }
-    if (user.status !== 'active') {
+    if (user.is_active !== 1) {
       throw new Error(`Cannot create session: User '${userId}' is deactivated`);
     }
 
     const sessionId = crypto.randomUUID();
     const rawToken = crypto.randomBytes(32).toString('hex');
     const tokenHash = this.hashToken(rawToken);
-    const csrfToken = crypto.randomBytes(32).toString('hex');
+    const csrfSecret = crypto.randomBytes(32).toString('hex');
 
     const now = Date.now();
     const expiresAt = now + this.absoluteLifetimeMs;
 
-    const session: SessionRecord = {
+    const session: BrowserSessionRecord = {
       id: sessionId,
       user_id: userId,
       token_hash: tokenHash,
-      csrf_token: csrfToken,
-      created_at: now,
-      expires_at: expiresAt,
-      last_active_at: now,
-      user_agent: meta.userAgent ?? null,
+      csrf_secret: csrfSecret,
       ip_address: meta.ipAddress ?? null,
+      user_agent: meta.userAgent ?? null,
+      expires_at: expiresAt,
+      created_at: now,
+      last_activity_at: now,
     };
 
     this.sessionRepo.insertSession(session);
@@ -82,18 +82,12 @@ export class SessionService {
     return {
       session,
       rawToken,
-      csrfToken,
+      csrfToken: csrfSecret,
     };
   }
 
   /**
    * Validates a raw session token against the persistent verifier store.
-   * Enforces:
-   * 1. SHA-256 verifier match
-   * 2. Absolute lifetime expiration check
-   * 3. Sliding idle activity window check
-   * 4. User active status check (deactivated users immediately lose session access)
-   * 5. Sliding window timestamp update on success
    */
   public async validateSession(rawToken: string): Promise<AuthenticatedSession | null> {
     if (typeof rawToken !== 'string' || rawToken.length === 0) {
@@ -115,21 +109,23 @@ export class SessionService {
     }
 
     // Check sliding idle timeout
-    if (now - session.last_active_at > this.idleTimeoutMs) {
+    if (now - session.last_activity_at > this.idleTimeoutMs) {
       this.sessionRepo.deleteSession(session.id);
       return null;
     }
 
-    // Check user existence and status
+    // Check user existence and active status
     const user = this.userRepo.findUserById(session.user_id);
-    if (!user || user.status !== 'active') {
+    if (!user || user.is_active !== 1) {
       this.sessionRepo.deleteSession(session.id);
       return null;
     }
 
-    // Slide activity window
-    this.sessionRepo.updateLastActiveAt(session.id, now);
-    session.last_active_at = now;
+    // Throttled activity update (only update last_activity_at if > 60,000ms has passed to avoid WAL thrashing)
+    if (now - session.last_activity_at > 60000) {
+      this.sessionRepo.updateLastActivityAt(session.id, now);
+      session.last_activity_at = now;
+    }
 
     return { session, user };
   }
@@ -146,7 +142,7 @@ export class SessionService {
   }
 
   /**
-   * Invalidates all sessions belonging to a specific user (e.g. on deactivation or password reset).
+   * Invalidates all sessions belonging to a specific user.
    */
   public async invalidateUserSessions(userId: string): Promise<number> {
     return this.sessionRepo.deleteUserSessions(userId);
@@ -154,7 +150,6 @@ export class SessionService {
 
   /**
    * Formats a Set-Cookie header string for session establishment.
-   * Decoupled from untrusted proxy headers and strictly governed by options.secure.
    */
   public static buildCookieHeader(rawToken: string, options: { secure: boolean; maxAgeMs?: number }): string {
     const maxAgeSec = Math.floor((options.maxAgeMs ?? ABSOLUTE_LIFETIME_MS) / 1000);

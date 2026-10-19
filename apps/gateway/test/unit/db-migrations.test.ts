@@ -85,26 +85,36 @@ describe('Gateway SQLite Schema Migrations Unit Tests', () => {
     db.close();
   });
 
-  it('additive Migration 003 introduces password_hash, sessions and invitations tables', () => {
+  it('additive Migration 003 introduces is_active, user_credentials, browser_sessions, and user_invitations tables', () => {
     const db = new DatabaseSync(':memory:');
     runMigrations(db, MIGRATIONS);
 
-    // Verify users columns
+    // Verify users columns: is_active added
     const userCols = db.prepare("PRAGMA table_info(users);").all() as { name: string }[];
     const colNames = userCols.map((c) => c.name);
-    assert(colNames.includes('password_hash'));
-    assert(colNames.includes('status'));
-    assert(colNames.includes('updated_at'));
+    assert(colNames.includes('is_active'));
 
-    // Verify sessions and invitations tables exist
-    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions';").get(), undefined);
-    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='invitations';").get(), undefined);
+    // Verify user_credentials table exists and has foreign key to users
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='user_credentials';").get(), undefined);
+    const credCols = db.prepare("PRAGMA table_info(user_credentials);").all() as { name: string }[];
+    const credColNames = credCols.map((c) => c.name);
+    assert(credColNames.includes('user_id'));
+    assert(credColNames.includes('password_hash'));
+    assert(credColNames.includes('algorithm'));
 
-    // Verify status CHECK constraint on users
+    // Verify browser_sessions and user_invitations tables exist
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='browser_sessions';").get(), undefined);
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='user_invitations';").get(), undefined);
+
+    // Verify indexes exist
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_sessions_token_hash';").get(), undefined);
+    assert.notEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_invitations_token_hash';").get(), undefined);
+
+    // Verify is_active CHECK constraint on users (must be 0 or 1)
     assert.throws(() => {
       db.prepare(`
-        INSERT INTO users (id, username, role, created_at, status)
-        VALUES ('u1', 'bad_user', 'member', 1000, 'invalid_status');
+        INSERT INTO users (id, username, role, created_at, is_active)
+        VALUES ('u1', 'bad_user', 'member', 1000, 2);
       `).run();
     }, /CHECK constraint failed/);
 

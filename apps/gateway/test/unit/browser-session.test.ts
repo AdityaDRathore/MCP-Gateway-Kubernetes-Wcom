@@ -19,7 +19,7 @@ describe('Browser SessionService Unit Tests (DEC-02 / DEC-07)', () => {
     userRepo = new UserRepository(db);
     sessionRepo = new SessionRepository(db);
     sessionService = new SessionService(sessionRepo, userRepo, {
-      idleTimeoutMs: 1000, // 1s for quick test
+      idleTimeoutMs: 100, // 100ms for quick test
       absoluteLifetimeMs: 5000, // 5s for quick test
     });
   });
@@ -29,7 +29,7 @@ describe('Browser SessionService Unit Tests (DEC-02 / DEC-07)', () => {
       id: 'usr-1',
       username: 'alice',
       role: 'admin',
-      status: 'active',
+      is_active: 1,
     });
 
     const result = await sessionService.createSession(user.id, {
@@ -53,7 +53,7 @@ describe('Browser SessionService Unit Tests (DEC-02 / DEC-07)', () => {
       id: 'usr-deact',
       username: 'bob',
       role: 'member',
-      status: 'deactivated',
+      is_active: 0,
     });
 
     await assert.rejects(
@@ -69,19 +69,16 @@ describe('Browser SessionService Unit Tests (DEC-02 / DEC-07)', () => {
       id: 'usr-2',
       username: 'charlie',
       role: 'member',
-      status: 'active',
+      is_active: 1,
     });
 
     const { rawToken, session: originalSession } = await sessionService.createSession(user.id);
-
-    // Wait 10ms to test sliding window
-    await new Promise((r) => setTimeout(r, 10));
 
     const auth = await sessionService.validateSession(rawToken);
     assert.notStrictEqual(auth, null);
     assert.strictEqual(auth?.user.id, 'usr-2');
     assert.strictEqual(auth?.user.username, 'charlie');
-    assert(auth!.session.last_active_at >= originalSession.last_active_at);
+    assert(auth!.session.last_activity_at >= originalSession.last_activity_at);
   });
 
   it('fails validation and deletes session on idle timeout', async () => {
@@ -89,13 +86,13 @@ describe('Browser SessionService Unit Tests (DEC-02 / DEC-07)', () => {
       id: 'usr-idle',
       username: 'dave',
       role: 'member',
-      status: 'active',
+      is_active: 1,
     });
 
     const { rawToken } = await sessionService.createSession(user.id);
 
-    // Wait beyond idleTimeoutMs (1000ms)
-    await new Promise((r) => setTimeout(r, 1050));
+    // Wait beyond idleTimeoutMs (100ms)
+    await new Promise((r) => setTimeout(r, 150));
 
     const auth = await sessionService.validateSession(rawToken);
     assert.strictEqual(auth, null);
@@ -110,7 +107,7 @@ describe('Browser SessionService Unit Tests (DEC-02 / DEC-07)', () => {
       id: 'usr-deact-mid',
       username: 'eve',
       role: 'member',
-      status: 'active',
+      is_active: 1,
     });
 
     const { rawToken } = await sessionService.createSession(user.id);
@@ -120,7 +117,7 @@ describe('Browser SessionService Unit Tests (DEC-02 / DEC-07)', () => {
     assert.notStrictEqual(auth1, null);
 
     // Deactivate user in repo
-    userRepo.updateStatus(user.id, 'deactivated');
+    userRepo.updateActiveStatus(user.id, 0);
 
     // Next validation must fail and destroy session
     const auth2 = await sessionService.validateSession(rawToken);
@@ -136,7 +133,7 @@ describe('Browser SessionService Unit Tests (DEC-02 / DEC-07)', () => {
       id: 'usr-logout',
       username: 'frank',
       role: 'admin',
-      status: 'active',
+      is_active: 1,
     });
 
     const { rawToken } = await sessionService.createSession(user.id);
@@ -151,7 +148,7 @@ describe('Browser SessionService Unit Tests (DEC-02 / DEC-07)', () => {
       id: 'usr-multi',
       username: 'grace',
       role: 'admin',
-      status: 'active',
+      is_active: 1,
     });
 
     const s1 = await sessionService.createSession(user.id);

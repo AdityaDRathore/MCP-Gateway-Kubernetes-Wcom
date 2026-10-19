@@ -372,11 +372,14 @@ export function createBrowserApp(options: BrowserServerOptions): express.Applica
     limit: config.MAX_PAYLOAD_SIZE_BYTES,
   });
 
+  const trustedProxiesList = config.TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean);
+
   const browserRouter = createBrowserRouter({
     sessionService,
     userRepo,
     passwordService,
     cookieSecure: config.COOKIE_SECURE,
+    trustedProxies: trustedProxiesList,
   });
 
   // Mount browser API at /api/v1/browser with origin enforcement and json parsing

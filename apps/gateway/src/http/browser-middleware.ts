@@ -171,7 +171,15 @@ export function createCsrfMiddleware() {
       return;
     }
 
-    const expectedBuf = Buffer.from(session.csrf_token, 'hex');
+    const secret = session.csrf_secret || (session as any).csrf_token;
+    if (!secret || typeof secret !== 'string') {
+      res.status(403).json({
+        error: 'Forbidden: Session CSRF secret not found',
+        code: 'CSRF_TOKEN_INVALID',
+      });
+      return;
+    }
+    const expectedBuf = Buffer.from(secret, 'hex');
     let providedBuf: Buffer;
     try {
       providedBuf = Buffer.from(csrfHeader, 'hex');

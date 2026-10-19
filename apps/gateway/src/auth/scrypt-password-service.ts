@@ -25,6 +25,14 @@ export interface ScryptOptions {
   saltLength?: number;
   maxmem?: number;
   maxConcurrent?: number;
+  queueTimeoutMs?: number;
+}
+
+export class ScryptConcurrencyError extends Error {
+  constructor(message = 'Authentication server busy: concurrency limit exceeded') {
+    super(message);
+    this.name = 'ScryptConcurrencyError';
+  }
 }
 
 export class ScryptPasswordService {
@@ -35,9 +43,10 @@ export class ScryptPasswordService {
   private readonly saltLength: number;
   private readonly maxmem: number;
   private readonly maxConcurrent: number;
+  private readonly queueTimeoutMs: number;
 
   private activeOperations = 0;
-  private readonly queue: Array<() => void> = [];
+  private readonly queue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 
   constructor(options: ScryptOptions = {}) {
     this.N = options.N ?? 16384;
@@ -47,10 +56,11 @@ export class ScryptPasswordService {
     this.saltLength = options.saltLength ?? 16;
     this.maxmem = options.maxmem ?? 32 * 1024 * 1024; // 32 MiB
     this.maxConcurrent = options.maxConcurrent ?? 5;
+    this.queueTimeoutMs = options.queueTimeoutMs ?? 5000;
   }
 
   /**
-   * Acquire a concurrency permit, queueing if maximum active operations are in flight.
+   * Acquire a concurrency permit, queueing with timeout if maximum active operations are in flight.
    */
   private async acquirePermit(): Promise<void> {
     if (this.activeOperations < this.maxConcurrent) {
@@ -58,11 +68,32 @@ export class ScryptPasswordService {
       return;
     }
 
-    return new Promise<void>((resolve) => {
-      this.queue.push(() => {
-        this.activeOperations++;
-        resolve();
-      });
+    return new Promise<void>((resolve, reject) => {
+      let timer: NodeJS.Timeout | null = null;
+
+      const item = {
+        resolve: () => {
+          if (timer) clearTimeout(timer);
+          this.activeOperations++;
+          resolve();
+        },
+        reject: (err: Error) => {
+          if (timer) clearTimeout(timer);
+          reject(err);
+        },
+      };
+
+      if (this.queueTimeoutMs > 0) {
+        timer = setTimeout(() => {
+          const idx = this.queue.indexOf(item);
+          if (idx !== -1) {
+            this.queue.splice(idx, 1);
+            reject(new ScryptConcurrencyError());
+          }
+        }, this.queueTimeoutMs);
+      }
+
+      this.queue.push(item);
     });
   }
 
@@ -73,7 +104,7 @@ export class ScryptPasswordService {
     this.activeOperations--;
     const next = this.queue.shift();
     if (next) {
-      next();
+      next.resolve();
     }
   }
 

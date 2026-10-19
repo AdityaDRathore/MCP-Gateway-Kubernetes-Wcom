@@ -1,75 +1,75 @@
 import { DatabaseSync } from 'node:sqlite';
 
-export interface SessionRecord {
+export interface BrowserSessionRecord {
   id: string;
   user_id: string;
   token_hash: string;
-  csrf_token: string;
-  created_at: number;
-  expires_at: number;
-  last_active_at: number;
-  user_agent: string | null;
+  csrf_secret: string;
   ip_address: string | null;
+  user_agent: string | null;
+  expires_at: number;
+  created_at: number;
+  last_activity_at: number;
 }
 
 export class SessionRepository {
   constructor(private db: DatabaseSync) {}
 
-  insertSession(session: SessionRecord): void {
+  insertSession(session: BrowserSessionRecord): void {
     const stmt = this.db.prepare(`
-      INSERT INTO sessions (id, user_id, token_hash, csrf_token, created_at, expires_at, last_active_at, user_agent, ip_address)
+      INSERT INTO browser_sessions (id, user_id, token_hash, csrf_secret, ip_address, user_agent, expires_at, created_at, last_activity_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
     `);
     stmt.run(
       session.id,
       session.user_id,
       session.token_hash,
-      session.csrf_token,
-      session.created_at,
-      session.expires_at,
-      session.last_active_at,
+      session.csrf_secret,
+      session.ip_address,
       session.user_agent,
-      session.ip_address
+      session.expires_at,
+      session.created_at,
+      session.last_activity_at
     );
   }
 
-  findSessionByTokenHash(tokenHash: string): SessionRecord | null {
+  findSessionByTokenHash(tokenHash: string): BrowserSessionRecord | null {
     const stmt = this.db.prepare(`
-      SELECT id, user_id, token_hash, csrf_token, created_at, expires_at, last_active_at, user_agent, ip_address
-      FROM sessions
+      SELECT id, user_id, token_hash, csrf_secret, ip_address, user_agent, expires_at, created_at, last_activity_at
+      FROM browser_sessions
       WHERE token_hash = ?;
     `);
-    const row = stmt.get(tokenHash) as SessionRecord | undefined;
+    const row = stmt.get(tokenHash) as BrowserSessionRecord | undefined;
     return row ?? null;
   }
 
-  updateLastActiveAt(id: string, lastActiveAt: number): void {
+  updateLastActivityAt(id: string, lastActivityAt: number): void {
     const stmt = this.db.prepare(`
-      UPDATE sessions
-      SET last_active_at = ?
+      UPDATE browser_sessions
+      SET last_activity_at = ?
       WHERE id = ?;
     `);
-    stmt.run(lastActiveAt, id);
+    stmt.run(lastActivityAt, id);
   }
 
   deleteSession(id: string): void {
-    const stmt = this.db.prepare(`DELETE FROM sessions WHERE id = ?;`);
+    const stmt = this.db.prepare(`DELETE FROM browser_sessions WHERE id = ?;`);
     stmt.run(id);
   }
 
   deleteSessionByTokenHash(tokenHash: string): void {
-    const stmt = this.db.prepare(`DELETE FROM sessions WHERE token_hash = ?;`);
+    const stmt = this.db.prepare(`DELETE FROM browser_sessions WHERE token_hash = ?;`);
     stmt.run(tokenHash);
   }
 
   deleteUserSessions(userId: string): number {
-    const stmt = this.db.prepare(`DELETE FROM sessions WHERE user_id = ?;`);
+    const stmt = this.db.prepare(`DELETE FROM browser_sessions WHERE user_id = ?;`);
     const result = stmt.run(userId);
     return typeof (result as any)?.changes === 'number' ? (result as any).changes : 0;
   }
 
   pruneExpiredSessions(now: number): number {
-    const stmt = this.db.prepare(`DELETE FROM sessions WHERE expires_at <= ?;`);
+    const stmt = this.db.prepare(`DELETE FROM browser_sessions WHERE expires_at <= ?;`);
     const result = stmt.run(now);
     return typeof (result as any)?.changes === 'number' ? (result as any).changes : 0;
   }

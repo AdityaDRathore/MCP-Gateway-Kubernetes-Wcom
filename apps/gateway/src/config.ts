@@ -52,6 +52,7 @@ export const ConfigSchema = z.object({
   // === Phase 5: Browser Listener & Dashboard Configuration ===
   BROWSER_PORT: z.coerce.number().int().min(1024, 'BROWSER_PORT must be at least 1024').max(65535, 'BROWSER_PORT must not exceed 65535').default(3001),
   ALLOWED_ORIGINS: z.string().default('http://dashboard.127.0.0.1.nip.io:8080,http://localhost:3001,http://127.0.0.1:3001'),
+  TRUSTED_PROXIES: z.string().default('127.0.0.1,::1,10.42.0.0/16,10.43.0.0/16'),
   COOKIE_SECURE: z.coerce.boolean().default(false),
   DASHBOARD_STATIC_PATH: z.string().default('/app/dist-dashboard'),
   KUBERNETES_API_URL: z.string().url('KUBERNETES_API_URL must be a valid URL')
