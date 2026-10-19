@@ -10,6 +10,7 @@
     "dev": "tsx src/index.ts",
     "test:unit": "tsx --test test/unit/*.test.ts",
     "test:protocol": "tsx --test --test-concurrency=1 test/protocol/*.test.ts",
+    "test:benchmark": "tsx test/benchmarks/load-test.ts",
     "test": "npm run test:unit && npm run test:protocol",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",

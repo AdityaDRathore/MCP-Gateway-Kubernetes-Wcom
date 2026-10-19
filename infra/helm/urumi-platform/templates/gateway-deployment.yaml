@@ -50,6 +50,7 @@ spec:
               add:
                 - CHOWN
                 - FOWNER
+                - DAC_OVERRIDE
           volumeMounts:
             - name: gateway-data
               mountPath: /data
