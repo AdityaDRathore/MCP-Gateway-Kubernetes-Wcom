@@ -622,10 +622,49 @@ describe('Gate P5-G3: Upstream & Tool Management Browser Façade Unit Tests', ()
   });
 
   // =========================================================================
-  // 6. Upstream Administrative Lifecycle (Admin Operations)
+  // 6. Fault-Injection on Error Path (THREAT-09, FAULT-INJ-01)
   // =========================================================================
 
-  it('11. Full Admin Upstream Lifecycle: PATCH, enable, disable, retry-cleanup, and DELETE', async () => {
+  it('11. Fault injection on error path: unexpected service exceptions with canary secrets return generic 500 without leaking credentials to client [FAULT-INJ-01]', async () => {
+    const errorCanary = 'CANARY_FAULT_SECRET_INJECTED_ERR_456';
+    const originalEnable = adminService.enableUpstream.bind(adminService);
+
+    // Inject fault into adminService
+    adminService.enableUpstream = async () => {
+      throw new Error(`Upstream handshake crashed unexpectedly with credential ${errorCanary}`);
+    };
+
+    try {
+      const res = await makeRequest('POST', '/api/v1/browser/upstreams/canary-service/enable', {
+        cookie: adminCookie,
+        csrfToken: adminCsrfToken,
+      });
+
+      assert.equal(res.status, 500);
+      assert.equal(res.body.error, 'Internal Server Error');
+      assert.equal(res.body.code, 'INTERNAL_ERROR');
+
+      // Verify the canary secret from the exception message NEVER leaks in response body or headers
+      assert.doesNotMatch(
+        res.rawBody,
+        new RegExp(errorCanary),
+        'Canary secret in error message must not appear in 500 response body'
+      );
+      assert.doesNotMatch(
+        JSON.stringify(res.headers),
+        new RegExp(errorCanary),
+        'Canary secret in error message must not appear in 500 response headers'
+      );
+    } finally {
+      adminService.enableUpstream = originalEnable;
+    }
+  });
+
+  // =========================================================================
+  // 7. Upstream Administrative Lifecycle (Admin Operations)
+  // =========================================================================
+
+  it('12. Full Admin Upstream Lifecycle: PATCH, enable, disable, retry-cleanup, and DELETE', async () => {
     // 1. PATCH displayName & timeout
     const patchRes = await makeRequest('PATCH', '/api/v1/browser/upstreams/canary-service', {
       cookie: adminCookie,
