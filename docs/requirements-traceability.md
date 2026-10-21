@@ -59,17 +59,17 @@ It strictly separates:
 
 | Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **GTW-01** | Aggregates multiple upstream MCP servers into a single downstream MCP endpoint. | `apps/gateway/` | Client connects to `/mcp` on gateway; `tools/list` returns tools from all registered upstreams. | Phase 4 | Planned | Core gateway functionality. |
-| **GTW-02** | Connects to at least 3 distinct upstream servers (WooCommerce, CRM, Tasks). | `apps/gateway/` | Tool list contains tools from WooCommerce, CRM, and Tasks. | Phase 4 | Planned | CRM and Tasks provide deterministic test mocks. |
-| **GTW-03** | Dynamic routing of tool calls to the correct upstream server. | `apps/gateway/` | Call to `woocommerce__create_product` routes to WooCommerce pod; call to `tasks__create_task` routes to Tasks pod. | Phase 4 | Planned | Test Step 6 of DoD. |
-| **GTW-04** | Tool namespacing (`{server}__{tool}`) to prevent collisions across upstreams. | `apps/gateway/` | All aggregated tools follow `{server}__{tool}` naming format. | Phase 4 | Planned | Enforced in gateway tool registry. |
-| **GTW-05** | Failure isolation: slow or dead upstream does not crash gateway or prevent calling healthy servers. | `apps/gateway/` | Terminate Upstream 2 pod; gateway responds to `tools/list` for remaining servers and executes calls normally. | Phase 4 | Planned | Test Step 9 of DoD. |
-| **GTW-06** | Configurable per-upstream request timeouts (e.g. 10s default). | `apps/gateway/` | Simulated slow upstream returns timeout error cleanly without hanging client. | Phase 4 | Planned | Enforced in gateway proxy layer. |
-| **GTW-07** | Upstream server management: dynamically add, remove, enable, disable upstreams without gateway restart. | `apps/gateway/`<br/>`apps/dashboard/` | Disable Upstream 3 via Dashboard; its tools immediately disappear from `tools/list` response. | Phase 4, 5 | Planned | Test Step 8 of DoD. |
-| **GTW-08** | Upstream health tracking: unhealthy upstreams marked `Unreachable` in Dashboard. | `apps/gateway/`<br/>`apps/dashboard/` | Dead upstream shows status `Unreachable` in UI status pill. | Phase 4, 5 | Planned | Test Step 9 of DoD. |
-| **GTW-09** | Upstream credential isolation: downstream clients never see or provide upstream credentials. | `apps/gateway/` | Downstream client uses only User API key; gateway injects internal upstream credentials. | Phase 4 | Planned | ADR-003 security invariant. |
-| **GTW-10** | Dynamic upstream credentials stored in Kubernetes Secrets. | `apps/gateway/` K8s client | Gateway creates Secret in `urumi-gateway-secrets` namespace using dedicated ServiceAccount RBAC. | Phase 4, 5 | Planned | Outlined in ADR-003. |
-| **GTW-11** | Gateway persistence: SQLite with WAL mode on PVC (`/data/gateway.db`). | `apps/gateway/` storage | Pod restart retains users, API keys, upstream configs, and audit logs. | Phase 4 | Planned | Storage failure model documented in architecture. |
+| **GTW-01** | Aggregates multiple upstream MCP servers into a single downstream MCP endpoint. | `apps/gateway/` | Client connects to `/mcp` on gateway; `tools/list` returns tools from all registered upstreams. | Phase 4, 5 | **Verified (Phase 4 Gate G9, Phase 5 Stage 5)** | Unified `/mcp` endpoint aggregates 10 tools across WooCommerce, CRM, and Tasks. Verified in live cluster under `TEST-8.3.1` and `TEST-8.5.1`. |
+| **GTW-02** | Connects to at least 3 distinct upstream servers (WooCommerce, CRM, Tasks). | `apps/gateway/` | Tool list contains tools from WooCommerce, CRM, and Tasks. | Phase 4, 5 | **Verified (Phase 4 Gate G9, Phase 5 Stage 5)** | Live cluster inspection and `TEST-8.4.1` verified 3 upstreams registered in SQLite `upstreams` table and connected via cluster DNS on port 3000. |
+| **GTW-03** | Dynamic routing of tool calls to the correct upstream server. | `apps/gateway/` | Call to `woocommerce__create_product` routes to WooCommerce pod; call to `tasks__create_task` routes to Tasks pod. | Phase 4, 5 | **Verified (Phase 4 Gate G9, Phase 5 Stage 5)** | `ToolRouter` dispatches calls based on parsed prefix to target upstream transport with fail-closed schema validation and timeouts. |
+| **GTW-04** | Tool namespacing (`{server}__{tool}`) to prevent collisions across upstreams. | `apps/gateway/` | All aggregated tools follow `{server}__{tool}` naming format. | Phase 4, 5 | **Verified (Phase 4 Gate G9, Phase 5 Stage 5)** | Enforced in `CatalogService` and `ToolRouter`. Discovers 10 namespaced tools (`woocommerce__*`, `crm__*`, `tasks__*`). Prevents tool collisions. |
+| **GTW-05** | Failure isolation: slow or dead upstream does not crash gateway or prevent calling healthy servers. | `apps/gateway/` | Terminate Upstream 2 pod; gateway responds to `tools/list` for remaining servers and executes calls normally. | Phase 4, 5 | **Verified (Phase 4 Gate G9, Phase 5 Stage 5)** | Single-flight upstream discovery catches upstream fetch failures, marks health degraded, and leaves remaining upstreams fully operational without crashing process. |
+| **GTW-06** | Configurable per-upstream request timeouts (e.g. 10s default). | `apps/gateway/` | Simulated slow upstream returns timeout error cleanly without hanging client. | Phase 4 | **Verified (Phase 4 Gate G9)** | Configured via `timeout_ms` in `upstreams` table (500..30000ms range). Enforced using `AbortController` in `ToolRouter.dispatch()`. |
+| **GTW-07** | Upstream server management: dynamically add, remove, enable, disable upstreams without gateway restart. | `apps/gateway/`<br/>`apps/dashboard/` | Disable Upstream 3 via Dashboard; its tools immediately disappear from `tools/list` response. | Phase 4, 5 | **Verified (Phase 4 Gate G7/G9, Phase 5 Stage 5)** | Full lifecycle managed via `/api/v1/browser/upstreams` and private `/admin/v1/upstreams`. Tested in `TEST-8.4.1` with instant catalog synchronization. |
+| **GTW-08** | Upstream health tracking: unhealthy upstreams marked `Unreachable` in Dashboard. | `apps/gateway/`<br/>`apps/dashboard/` | Dead upstream shows status `Unreachable` in UI status pill. | Phase 4, 5 | **Verified (Phase 5 Stage 5)** | Gateway tracks upstream reachability in `CatalogService`; UI renders `Connected`, `Unreachable`, or `Disabled` status pills in `UpstreamsTab.tsx`. |
+| **GTW-09** | Upstream credential isolation: downstream clients never see or provide upstream credentials. | `apps/gateway/` | Downstream client uses only User API key; gateway injects internal upstream credentials. | Phase 4, 5 | **Verified (Phase 4 Gate G7, Phase 5 Stage 5)** | Downstream clients use only Bearer API keys. Gateway injects internal credentials server-side from Kubernetes Secrets. Browser DTOs redact all secret references (`TEST-8.4.1`). |
+| **GTW-10** | Dynamic upstream credentials stored in Kubernetes Secrets. | `apps/gateway/` K8s client | Gateway creates Secret in `urumi-gateway-secrets` namespace using dedicated ServiceAccount RBAC. | Phase 4, 5 | **Verified (Phase 4 Gate G7/G9, Phase 5 Stage 5)** | SecretManager handles creation, updates, and deletion in namespace `urumi-gateway-secrets` via dedicated ServiceAccount RBAC. |
+| **GTW-11** | Gateway persistence: SQLite with WAL mode on PVC (`/data/gateway.db`). | `apps/gateway/` storage | Pod restart retains users, API keys, upstream configs, and audit logs. | Phase 4, 5 | **Verified (Phase 4 Gate G8, Phase 5 Stage 5)** | Node.js 24 `node:sqlite` in WAL mode on `urumi-gateway-pvc` (500Mi RWO). Survived pod recreation in Stage 5 rollout; passes `PRAGMA integrity_check` (`TEST-8.7.1`). |
 
 ---
 
@@ -77,12 +77,12 @@ It strictly separates:
 
 | Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **SEC-01** | User authentication on downstream MCP endpoint via `Authorization: Bearer <key>`. | `apps/gateway/` auth middleware | Request without key returns 401; request with valid key succeeds. | Phase 1, 5 | **Protocol Verified in Spike (App Planned)** | Spike Test 1 (missing + invalid key) and Test 2 verified 401 rejection and bearer acceptance. App middleware planned in Phase 5. |
-| **SEC-02** | Each team member has a unique API key. | `apps/gateway/` user management | Distinct keys generated for User A and User B. | Phase 5 | Planned | Test Step 2 (User A) vs Test Step 4 (User B). |
-| **SEC-03** | Plaintext key displayed exactly once upon creation; stored hashed (SHA-256). | `apps/gateway/` user management | Database dump reveals only SHA-256 hashes, zero plaintext keys. | Phase 5 | Planned | Security requirement from brief. |
-| **SEC-04** | Instantaneous key revocation: revoked key rejected on the very next request. | `apps/gateway/` auth middleware | Revoke User B key; immediate tool call returns HTTP 401 Unauthorized. | Phase 5 | Planned | Test Step 7 of DoD. |
-| **SEC-05** | Mandatory Admin role: manage upstreams, manage users/keys, view all audit logs, use tools. | `apps/gateway/`<br/>`apps/dashboard/` | Admin user accesses control plane endpoints and audit logs. | Phase 5 | Planned | Core role requirement. |
-| **SEC-06** | Mandatory Member role: use permitted tools, view own usage/audit logs only. | `apps/gateway/`<br/>`apps/dashboard/` | Member cannot access admin APIs or view other users' logs. | Phase 5 | Planned | Core role requirement. |
+| **SEC-01** | User authentication on downstream MCP endpoint via `Authorization: Bearer <key>`. | `apps/gateway/` auth middleware | Request without key returns 401; request with valid key succeeds. | Phase 1, 4, 5 | **Verified (Phase 5 Stage 5)** | Validated in live cluster (`TEST-8.3.1`). Missing/invalid key returns 401 (`TEST-8.3.2`). Browser session cookies rejected on `/mcp` (`TEST-8.3.3`). |
+| **SEC-02** | Each team member has a unique API key. | `apps/gateway/` user management | Distinct keys generated for User A and User B. | Phase 5 | **Verified (Phase 5 Stage 5)** | Verified via `TEST-8.2.5`. Keys are bound to specific `user_id` records in SQLite `api_keys` table with unique prefixes and hashes. |
+| **SEC-03** | Plaintext key displayed exactly once upon creation; stored hashed (SHA-256). | `apps/gateway/` user management | Database dump reveals only SHA-256 hashes, zero plaintext keys. | Phase 5 | **Verified (Phase 5 Stage 5)** | Plaintext key `urumi_live_<hex>` returned on `POST /keys` (`TEST-8.2.5`); omitted in `GET /keys` (`TEST-8.2.6`). DB stores only `key_hash`. |
+| **SEC-04** | Instantaneous key revocation: revoked key rejected on the very next request. | `apps/gateway/` auth middleware | Revoke User B key; immediate tool call returns HTTP 401 Unauthorized. | Phase 5 | **Verified (Phase 5 Stage 5)** | Key revoked via `POST /keys/:id/revoke` immediately rejected on `/mcp` with HTTP 401 (`TEST-8.2.8`). |
+| **SEC-05** | Mandatory Admin role: manage upstreams, manage users/keys, view all audit logs, use tools. | `apps/gateway/`<br/>`apps/dashboard/` | Admin user accesses control plane endpoints and audit logs. | Phase 5 | **Verified (Phase 5 Stage 5)** | Verified in live cluster: Admin creates invitations (`TEST-8.2.1`), lists upstreams (`TEST-8.4.1`), queries audit trail (`TEST-8.6.1`), and manages member roles. |
+| **SEC-06** | Mandatory Member role: use permitted tools, view own usage/audit logs only. | `apps/gateway/`<br/>`apps/dashboard/` | Member cannot access admin APIs or view other users' logs. | Phase 5 | **Verified (Phase 5 Stage 5)** | Verified in live cluster: Member denied `GET /members` (`TEST-8.2.4`, 403) and denied `GET /audit` (`TEST-8.6.2`, 403). Members manage only own API keys. |
 
 ---
 
@@ -90,10 +90,10 @@ It strictly separates:
 
 | Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **AUD-01** | Audit log intercepts every tool call passing through the gateway. | `apps/gateway/` audit middleware | Every tool invocation produces a structured audit record. | Phase 5 | Planned | Interceptor in gateway proxy. |
-| **AUD-02** | Full attribution: records User ID, Upstream Server, Tool Name, Timestamp, Duration, Status, Outcome. | `apps/gateway/` audit table | Query audit log: fields are populated with accurate values. | Phase 5 | Planned | Test Step 10 of DoD. |
-| **AUD-03** | Audit logs persisted in SQLite on PVC across pod restarts. | `apps/gateway/` DB | Restart gateway pod; historical audit logs remain queryable. | Phase 5 | Planned | Durability requirement. |
-| **AUD-04** | Dashboard Audit Log UI: searchable, filterable table of tool executions. | `apps/dashboard/` | Open audit log view; filter by user (User A vs User B) and status. | Phase 5 | Planned | Test Step 10 of DoD. |
+| **AUD-01** | Audit log intercepts every tool call passing through the gateway. | `apps/gateway/` audit middleware | Every tool invocation produces a structured audit record. | Phase 4, 5 | **Verified (Phase 4 Gate G9, Phase 5 Stage 5)** | Two-phase audit interceptor in `ToolRouter` logs call initiation and finalization with millisecond duration. |
+| **AUD-02** | Full attribution: records User ID, Upstream Server, Tool Name, Timestamp, Duration, Status, Outcome. | `apps/gateway/` audit table | Query audit log: fields are populated with accurate values. | Phase 4, 5 | **Verified (Phase 4 Gate G9, Phase 5 Stage 5)** | Schema-enforced fields in SQLite `audit_logs`. Verified via `TEST-8.6.1` with sanitized error messages and SHA-256 argument hashes. |
+| **AUD-03** | Audit logs persisted in SQLite on PVC across pod restarts. | `apps/gateway/` DB | Restart gateway pod; historical audit logs remain queryable. | Phase 4, 5 | **Verified (Phase 4 Gate G8/G9, Phase 5 Stage 5)** | Audit history (451 records prior to Stage 5 rollout) preserved across Helm revision 9 to 10 upgrade. Verified in `TEST-8.6.1` and `TEST-8.7.1`. |
+| **AUD-04** | Dashboard Audit Log UI: searchable, filterable table of tool executions. | `apps/dashboard/` | Open audit log view; filter by user (User A vs User B) and status. | Phase 5 | **Verified (Phase 5 Stage 5)** | Implemented in `AuditTab.tsx` with paginated query controls (`limit`, `offset`, `status`, `userId`) querying `/api/v1/browser/audit` (`TEST-8.6.1`). |
 
 ---
 
@@ -101,10 +101,10 @@ It strictly separates:
 
 | Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **CHT-01** | Web dashboard built in React + Vite with clean UI. | `apps/dashboard/` | Browser loads dashboard; responsive layout, tab navigation. | Phase 5 | Planned | Frontend SPA. |
-| **CHT-02** | Chat interface communicating with an LLM (Gemini / Claude / OpenAI / Ollama). | `apps/dashboard/`<br/>`apps/gateway/` | User sends message; LLM streams response in chat UI. | Phase 6 | Planned | Chat implementation. |
-| **CHT-03** | LLM executes tools through the gateway as the logged-in user (User A). | `apps/gateway/` agent loop | Chat agent calls `woocommerce__create_product`; audit log attributes execution to User A. | Phase 6 | Planned | Test Step 2 of DoD. |
-| **CHT-04** | Real-time tool execution visibility in chat (tool name, inputs, status pill). | `apps/dashboard/` | Chat UI renders collapsible tool call block during execution. | Phase 6 | Planned | UX requirement from brief. |
+| **CHT-01** | Web dashboard built in React + Vite with clean UI. | `apps/dashboard/` | Browser loads dashboard; responsive layout, tab navigation. | Phase 5 | **Verified (Phase 5 Stage 5)** | React 19 + Vite 6 SPA deployed on Port 3001 and verified live via Traefik Ingress at `http://dashboard.127.0.0.1.nip.io:8080/` (`TEST-8.1.1`). |
+| **CHT-02** | Chat interface communicating with an LLM (Gemini / Claude / OpenAI / Ollama). | `apps/dashboard/`<br/>`apps/gateway/` | User sends message; LLM streams response in chat UI. | Phase 6 | **Planned for Phase 6** | Chat interface and LLM streaming loop scheduled for Phase 6 milestone. |
+| **CHT-03** | LLM executes tools through the gateway as the logged-in user (User A). | `apps/gateway/` agent loop | Chat agent calls `woocommerce__create_product`; audit log attributes execution to User A. | Phase 6 | **Planned for Phase 6** | Agent tool loop execution and audit attribution scheduled for Phase 6 milestone. |
+| **CHT-04** | Real-time tool execution visibility in chat (tool name, inputs, status pill). | `apps/dashboard/` | Chat UI renders collapsible tool call block during execution. | Phase 6 | **Planned for Phase 6** | Real-time tool call pill and collapsible input view scheduled for Phase 6 milestone. |
 
 ---
 
@@ -112,21 +112,22 @@ It strictly separates:
 
 | Req ID | Atomic Statement / Requirement | Owning Component | Verification Test | Phase | Status | Evidence / Notes |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **EXT-01** | External client (MCP Inspector, Claude Code, Cursor) connects to gateway URL. | `apps/gateway/` `/mcp` endpoint | Run `npx @modelcontextprotocol/inspector` connecting to gateway; discovery succeeds. | Phase 1, 6 | **Protocol Verified in Spike (App Planned)** | Protocol capability verified with SDK client in spike. Live gateway connection planned for Phase 6. |
-| **EXT-02** | External client authenticates with User B's API key. | `apps/gateway/` `/mcp` endpoint | MCP Inspector connects using `Authorization: Bearer <user_b_key>`. | Phase 6 | Planned | Test Step 4 of DoD. |
-| **EXT-03** | External client executes cross-server workflow combining tools from 2 servers. | `apps/gateway/` | Prompt combining WooCommerce and Tasks executed; composite result returned. | Phase 6 | Planned | Test Step 6 of DoD. |
+| **EXT-01** | External client (MCP Inspector, Claude Code, Cursor) connects to gateway URL. | `apps/gateway/` `/mcp` endpoint | Run `npx @modelcontextprotocol/inspector` connecting to gateway; discovery succeeds. | Phase 1, 6 | **Protocol Verified in Spike & Unit Suite (App Planned for Phase 6)** | Streamable HTTP protocol verified with SDK client in spike and gateway test suites. Live external client demo planned for Phase 6. |
+| **EXT-02** | External client authenticates with User B's API key. | `apps/gateway/` `/mcp` endpoint | MCP Inspector connects using `Authorization: Bearer <user_b_key>`. | Phase 6 | **Planned for Phase 6** | Test Step 4 of assignment Definition of Done. |
+| **EXT-03** | External client executes cross-server workflow combining tools from 2 servers. | `apps/gateway/` | Prompt combining WooCommerce and Tasks executed; composite result returned. | Phase 6 | **Planned for Phase 6** | Test Step 6 of assignment Definition of Done. |
 
 ---
 
 ## 3. Scope Boundaries: Bonus vs Mandatory Features
 
-| Feature | Classification | Policy for Round 1 |
-| :--- | :---: | :--- |
-| **Admin and Member Roles** | **MANDATORY** | Fully implemented in Phase 5. |
-| **Unique User API Keys + Instant Revocation** | **MANDATORY** | Fully implemented in Phase 5. |
-| **Audit Logging with User Attribution** | **MANDATORY** | Fully implemented in Phase 5. |
-| **Failure Isolation & Upstream Timeouts** | **MANDATORY** | Fully implemented in Phase 4. |
-| **External Client Support (MCP Inspector)** | **MANDATORY** | Fully implemented in Phase 6. |
-| **Per-Tool Granular Role Restrictions** | **BONUS** | Frozen until Steps 1–10 pass. |
-| **Multi-Store Dynamic Provisioning** | **BONUS** | Frozen until Steps 1–10 pass. |
-| **OAuth / OIDC Gateway Replacement** | **OUT OF SCOPE** | Out of scope (API keys required by brief). |
+| Feature | Classification | Policy for Round 1 | Status |
+| :--- | :---: | :--- | :---: |
+| **Admin and Member Roles** | **MANDATORY** | Fully implemented in Phase 5. | **Verified (Phase 5 Stage 5)** |
+| **Unique User API Keys + Instant Revocation** | **MANDATORY** | Fully implemented in Phase 5. | **Verified (Phase 5 Stage 5)** |
+| **Audit Logging with User Attribution** | **MANDATORY** | Fully implemented in Phase 5. | **Verified (Phase 5 Stage 5)** |
+| **Failure Isolation & Upstream Timeouts** | **MANDATORY** | Fully implemented in Phase 4. | **Verified (Phase 4 Gate G9)** |
+| **External Client Support (MCP Inspector)** | **MANDATORY** | Fully implemented in Phase 6. | **Planned for Phase 6** |
+| **In-Dashboard Chat Agent Loop** | **MANDATORY** | Fully implemented in Phase 6. | **Planned for Phase 6** |
+| **Per-Tool Granular Role Restrictions** | **BONUS** | Frozen until Steps 1–10 pass. | **Deferred** |
+| **Multi-Store Dynamic Provisioning** | **BONUS** | Frozen until Steps 1–10 pass. | **Deferred** |
+| **OAuth / OIDC Gateway Replacement** | **OUT OF SCOPE** | Out of scope (API keys required by brief). | **Out of Scope** |

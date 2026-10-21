@@ -1,9 +1,9 @@
 # ADR-012: Gateway Storage Engine via Node.js Built-in `node:sqlite`, WAL Concurrency, Permissions, and Disaster Recovery
 
-**Status**: Proposed — Pending Technical Head Approval  
-**Date**: 2026-10-15 (Revised: 2026-10-15)  
+**Status**: Accepted & Empirically Verified (Phase 5 Gate P5-G6 Stage 5)  
+**Date**: 2026-10-15 (Revised: 2026-10-21)  
 **Decision Makers**: Aditya Rathore (FDE Candidate), Antigravity AI  
-**Related Documents**: [`ADR-001`](./ADR-001-stack-and-deployment.md), [`ADR-004`](./ADR-004-stateful-storage-and-workload-controllers.md), [`ADR-014`](./ADR-014-two-phase-audit-logging-and-retention.md)  
+**Related Documents**: [`ADR-001`](./ADR-001-stack-and-deployment.md), [`ADR-004`](./ADR-004-stateful-storage-and-workload-controllers.md), [`ADR-014`](./ADR-014-two-phase-audit-logging-and-retention.md), [`ADR-019`](./ADR-019-browser-identity-session-and-csrf.md), [`ADR-020`](./ADR-020-dual-listener-and-ingress-perimeter.md)  
 
 ---
 
@@ -220,4 +220,8 @@ CREATE INDEX idx_audit_created ON audit_logs(created_at);
 ## 3. Consequences & Verification
 - **Positive**: Strict single-writer data safety, automated daily backups with integrity verification, explicit disaster recovery runbook.
 - **Negative**: Restores require brief downtime (scaling replica to 0).
-- **Verification**: Verified via synthetic corrupt-snapshot rejection tests, migration rollback tests, and simulated restore drills.
+- **Verification**: 
+  - Verified via synthetic corrupt-snapshot rejection tests, migration rollback tests, and simulated restore drills.
+  - **Empirical Acceptance (Phase 5 Gate P5-G6 Stage 5)**: Verified live in cluster `k3d-urumi` across all 28 acceptance checks (`TEST-8.1.1` through `TEST-8.8.2`). Migration 003 successfully extended schema to 8 tables (`schema_migrations`, `users`, `user_credentials`, `browser_sessions`, `user_invitations`, `api_keys`, `upstreams`, `audit_logs`). 
+  - Pre-Stage 5 live backup snapshot was archived to `backups/pre-stage5/gateway-pre-stage5.db` (SHA-256: `a9307df1231b0cf0446823214e52420c32c081ce7d7525aaa7e5df435377ff6f`), validating offline integrity check `PRAGMA integrity_check = 'ok'`.
+
