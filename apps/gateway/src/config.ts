@@ -99,6 +99,13 @@ export const ConfigSchema = z.object({
       'KUBERNETES_API_URL destination must be an approved Kubernetes API server host (e.g. kubernetes.default.svc or 10.43.0.1)'
     )
     .optional(),
+
+  // === Phase 6: Chat Agent & Model Provider Configuration ===
+  CHAT_PROVIDER: z.enum(['gemini', 'mock']).default('gemini'),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-flash-lite-latest'),
+  CHAT_TURN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(30000),
+  PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(15000),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
