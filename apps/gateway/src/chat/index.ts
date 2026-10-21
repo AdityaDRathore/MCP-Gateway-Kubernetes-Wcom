@@ -1,6 +1,8 @@
 export * from './types.js';
 export * from './gemini-provider.js';
 export * from './mock-provider.js';
+export * from './confirmation.js';
+export * from './agent-loop.js';
 
 import { ModelProvider } from './types.js';
 import { GeminiProviderAdapter } from './gemini-provider.js';

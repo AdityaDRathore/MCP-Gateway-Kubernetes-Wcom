@@ -32,6 +32,9 @@ import { ApiKeyService } from './auth/api-key-service.js';
 import { ApiKeyRepository } from './db/api-key-repo.js';
 import { AuditRepository } from './db/audit-repo.js';
 import { DatabaseManager } from './db/connection.js';
+import { ModelProvider } from './chat/types.js';
+import { ConfirmationManager } from './chat/confirmation.js';
+import { AgentLoopOrchestrator } from './chat/agent-loop.js';
 
 // Polyfill global crypto for SDK Streamable HTTP transport streamId generation
 if (typeof (globalThis as any).crypto === 'undefined') {
@@ -358,6 +361,10 @@ export interface BrowserServerOptions {
   apiKeyRepo?: ApiKeyRepository;
   dbManager?: DatabaseManager;
   auditRepo?: AuditRepository;
+  toolRouter?: ToolRouter;
+  modelProvider?: ModelProvider;
+  confirmationManager?: ConfirmationManager;
+  agentLoop?: AgentLoopOrchestrator;
 }
 
 /**
@@ -402,6 +409,11 @@ export function createBrowserApp(options: BrowserServerOptions): express.Applica
     apiKeyRepo: options.apiKeyRepo,
     dbManager: options.dbManager,
     auditRepo: options.auditRepo,
+    toolRouter: options.toolRouter,
+    modelProvider: options.modelProvider,
+    confirmationManager: options.confirmationManager,
+    agentLoop: options.agentLoop,
+    chatTurnTimeoutMs: config.CHAT_TURN_TIMEOUT_MS,
   });
 
   // Mount browser API at /api/v1/browser with origin enforcement and json parsing

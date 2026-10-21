@@ -124,6 +124,10 @@ const app = createExpressApp({
   readinessCheck: () => dbManager.isHealthy(),
 });
 
+import { createModelProvider } from './chat/index.js';
+
+const modelProvider = createModelProvider(config);
+
 const browserApp = createBrowserApp({
   config,
   sessionService,
@@ -137,6 +141,8 @@ const browserApp = createBrowserApp({
   apiKeyRepo,
   dbManager,
   auditRepo,
+  toolRouter,
+  modelProvider,
   readinessCheck: () => dbManager.isHealthy(),
 });
 

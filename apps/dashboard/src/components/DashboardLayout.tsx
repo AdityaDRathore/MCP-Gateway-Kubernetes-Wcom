@@ -5,8 +5,9 @@ import { UpstreamsTab } from './UpstreamsTab';
 import { MembersTab } from './MembersTab';
 import { KeysTab } from './KeysTab';
 import { AuditTab } from './AuditTab';
+import { ChatTab } from './ChatTab';
 
-type TabType = 'overview' | 'upstreams' | 'members' | 'keys' | 'audit';
+type TabType = 'overview' | 'upstreams' | 'members' | 'keys' | 'audit' | 'chat';
 
 export const DashboardLayout: React.FC = () => {
   const { user, logout } = useAuth();
@@ -14,6 +15,7 @@ export const DashboardLayout: React.FC = () => {
 
   const navItems: { id: TabType; label: string; icon: string }[] = [
     { id: 'overview', label: 'Overview', icon: '📊' },
+    { id: 'chat', label: 'AI Assistant', icon: '🤖' },
     { id: 'upstreams', label: 'Upstreams & Catalog', icon: '⚡' },
     { id: 'members', label: 'Team Members', icon: '👥' },
     { id: 'keys', label: 'API Keys', icon: '🔑' },
@@ -158,6 +160,7 @@ export const DashboardLayout: React.FC = () => {
         {/* Content View */}
         <main style={{ flex: 1, padding: '2.5rem', maxWidth: '1400px', margin: '0 auto', width: '100%' }}>
           {activeTab === 'overview' && <OverviewTab />}
+          {activeTab === 'chat' && <ChatTab />}
           {activeTab === 'upstreams' && <UpstreamsTab />}
           {activeTab === 'members' && <MembersTab />}
           {activeTab === 'keys' && <KeysTab />}

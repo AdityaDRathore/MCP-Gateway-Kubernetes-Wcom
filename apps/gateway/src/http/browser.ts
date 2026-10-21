@@ -27,6 +27,10 @@ import { ApiKeyRepository, ApiKeyWithUserSummary } from '../db/api-key-repo.js';
 import { AuditRepository, AuditStatus } from '../db/audit-repo.js';
 import { DatabaseManager } from '../db/connection.js';
 import { DatabaseSync } from 'node:sqlite';
+import { ToolRouter } from '../upstream/tool-router.js';
+import { ModelProvider, ProviderError } from '../chat/types.js';
+import { ConfirmationManager } from '../chat/confirmation.js';
+import { AgentLoopOrchestrator } from '../chat/agent-loop.js';
 
 const LoginRequestSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -55,6 +59,36 @@ const CreateKeySchema = z.object({
   name: z.string().min(1, 'Key name is required').max(64, 'Key name must be at most 64 characters'),
   expiresInDays: z.number().int().positive().max(365).optional(),
   userId: z.string().optional(),
+});
+
+export const ChatTurnRequestSchema = z.object({
+  message: z.string().min(1, 'Message cannot be empty').max(4000, 'Message cannot exceed 4000 characters'),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant', 'system', 'tool']),
+        content: z.string().optional(),
+        toolCalls: z.array(z.any()).optional(),
+        toolCallId: z.string().optional(),
+        name: z.string().optional(),
+      })
+    )
+    .optional(),
+});
+
+export const ChatConfirmRequestSchema = z.object({
+  confirmationToken: z.string().min(1, 'Confirmation token is required'),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant', 'system', 'tool']),
+        content: z.string().optional(),
+        toolCalls: z.array(z.any()).optional(),
+        toolCallId: z.string().optional(),
+        name: z.string().optional(),
+      })
+    )
+    .optional(),
 });
 
 export const AuditQuerySchema = z.object({
@@ -156,6 +190,11 @@ export interface BrowserRouterOptions {
   apiKeyRepo?: ApiKeyRepository;
   dbManager?: DatabaseManager;
   auditRepo?: AuditRepository;
+  toolRouter?: ToolRouter;
+  modelProvider?: ModelProvider;
+  confirmationManager?: ConfirmationManager;
+  agentLoop?: AgentLoopOrchestrator;
+  chatTurnTimeoutMs?: number;
 }
 
 export function createBrowserRouter(options: BrowserRouterOptions): Router {
@@ -164,6 +203,22 @@ export function createBrowserRouter(options: BrowserRouterOptions): Router {
   const csrfAuth = createCsrfMiddleware();
   const rateLimiter = options.rateLimiter ?? new LoginRateLimiter();
   const trustedProxies = options.trustedProxies ?? ['127.0.0.1', '::1', '10.42.0.0/16', '10.43.0.0/16'];
+
+  const confirmationManager = options.confirmationManager ?? new ConfirmationManager();
+  const agentLoop =
+    options.agentLoop ??
+    (options.toolRouter && options.catalogService && options.modelProvider
+      ? new AgentLoopOrchestrator(
+          options.catalogService,
+          options.toolRouter,
+          options.modelProvider,
+          confirmationManager,
+          {
+            CHAT_TURN_TIMEOUT_MS: options.chatTurnTimeoutMs ?? 30000,
+            PROVIDER_TIMEOUT_MS: 15000,
+          } as any
+        )
+      : null);
 
   const handleAdminError = (err: unknown, res: Response, defaultMessage = 'Internal Server Error'): void => {
     if (err instanceof AdminError) {
@@ -1099,6 +1154,143 @@ export function createBrowserRouter(options: BrowserRouterOptions): Router {
     } catch (err: unknown) {
       logger.error('Failed to list audits', { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 20. POST /api/v1/browser/chat
+   * Submits a conversational turn to the bounded agent loop.
+   * Session authentication and CSRF protection required.
+   */
+  router.post('/chat', sessionAuth, csrfAuth, async (req: Request, res: Response): Promise<void> => {
+    const browserReq = req as BrowserRequest;
+    const user = browserReq.sessionContext?.user;
+    if (!user || user.is_active !== 1) {
+      res.status(401).json({ error: 'Unauthorized: active session required', code: 'UNAUTHORIZED' });
+      return;
+    }
+
+    if (!agentLoop) {
+      res.status(503).json({
+        error: 'Chat service unconfigured: model provider or agent loop dependencies unavailable',
+        code: 'PROVIDER_UNCONFIGURED',
+      });
+      return;
+    }
+
+    const parseResult = ChatTurnRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      res.status(400).json({
+        error: 'Validation Error',
+        details: parseResult.error.format(),
+      });
+      return;
+    }
+
+    try {
+      const response = await agentLoop.executeTurn({
+        user: {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+        },
+        message: parseResult.data.message,
+        history: parseResult.data.history as any,
+      });
+
+      res.status(200).json(response);
+    } catch (err: unknown) {
+      if (err instanceof ProviderError) {
+        res.status(err.statusCode).json({
+          error: err.message,
+          code: err.code,
+        });
+        return;
+      }
+      logger.error('Unhandled chat turn error', {
+        error: err instanceof Error ? err.message : String(err),
+        userId: user.id,
+      });
+      res.status(500).json({
+        error: 'An internal error occurred while processing your chat request',
+        code: 'INTERNAL_ERROR',
+      });
+    }
+  });
+
+  /**
+   * 21. POST /api/v1/browser/chat/confirm
+   * Confirms and executes a previously suspended mutating tool call.
+   * Session authentication and CSRF protection required.
+   */
+  router.post('/chat/confirm', sessionAuth, csrfAuth, async (req: Request, res: Response): Promise<void> => {
+    const browserReq = req as BrowserRequest;
+    const user = browserReq.sessionContext?.user;
+    if (!user || user.is_active !== 1) {
+      res.status(401).json({ error: 'Unauthorized: active session required', code: 'UNAUTHORIZED' });
+      return;
+    }
+
+    if (!agentLoop) {
+      res.status(503).json({
+        error: 'Chat service unconfigured: model provider or agent loop dependencies unavailable',
+        code: 'PROVIDER_UNCONFIGURED',
+      });
+      return;
+    }
+
+    const parseResult = ChatConfirmRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      res.status(400).json({
+        error: 'Validation Error',
+        details: parseResult.error.format(),
+      });
+      return;
+    }
+
+    const verification = confirmationManager.verifyAndConsumeToken(
+      parseResult.data.confirmationToken,
+      user.id
+    );
+
+    if (!verification.valid || !verification.payload || !verification.parsedArgs) {
+      const statusCode = verification.code === 'CONFIRMATION_USER_MISMATCH' ? 403 : 400;
+      res.status(statusCode).json({
+        error: verification.error ?? 'Invalid confirmation token',
+        code: verification.code ?? 'INVALID_CONFIRMATION_TOKEN',
+      });
+      return;
+    }
+
+    try {
+      const response = await agentLoop.resumeTurnWithConfirmedAction({
+        user: {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+        },
+        toolName: verification.payload.toolName,
+        args: verification.parsedArgs,
+        history: parseResult.data.history as any,
+      });
+
+      res.status(200).json(response);
+    } catch (err: unknown) {
+      if (err instanceof ProviderError) {
+        res.status(err.statusCode).json({
+          error: err.message,
+          code: err.code,
+        });
+        return;
+      }
+      logger.error('Unhandled chat confirmation execution error', {
+        error: err instanceof Error ? err.message : String(err),
+        userId: user.id,
+      });
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'An internal error occurred while executing the confirmed action',
+        code: 'INTERNAL_ERROR',
+      });
     }
   });
 
