@@ -30,6 +30,7 @@ import { InvitationService } from './auth/invitation-service.js';
 import { InvitationRepository } from './db/invitation-repo.js';
 import { ApiKeyService } from './auth/api-key-service.js';
 import { ApiKeyRepository } from './db/api-key-repo.js';
+import { AuditRepository } from './db/audit-repo.js';
 import { DatabaseManager } from './db/connection.js';
 
 // Polyfill global crypto for SDK Streamable HTTP transport streamId generation
@@ -356,6 +357,7 @@ export interface BrowserServerOptions {
   apiKeyService?: ApiKeyService;
   apiKeyRepo?: ApiKeyRepository;
   dbManager?: DatabaseManager;
+  auditRepo?: AuditRepository;
 }
 
 /**
@@ -399,6 +401,7 @@ export function createBrowserApp(options: BrowserServerOptions): express.Applica
     apiKeyService: options.apiKeyService,
     apiKeyRepo: options.apiKeyRepo,
     dbManager: options.dbManager,
+    auditRepo: options.auditRepo,
   });
 
   // Mount browser API at /api/v1/browser with origin enforcement and json parsing

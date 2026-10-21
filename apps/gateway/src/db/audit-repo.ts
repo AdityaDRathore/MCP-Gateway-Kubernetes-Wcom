@@ -130,7 +130,7 @@ export class AuditRepository {
       query += ` WHERE ${conditions.join(' AND ')}`;
     }
 
-    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?;';
+    query += ' ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?;';
     params.push(limit, offset);
 
     const stmt = this.db.prepare(query);

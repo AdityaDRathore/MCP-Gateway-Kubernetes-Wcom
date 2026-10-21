@@ -136,6 +136,7 @@ const browserApp = createBrowserApp({
   apiKeyService,
   apiKeyRepo,
   dbManager,
+  auditRepo,
   readinessCheck: () => dbManager.isHealthy(),
 });
 

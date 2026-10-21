@@ -56,6 +56,27 @@ export class UserRepository {
     return row ?? null;
   }
 
+  findUsersByIds(ids: string[]): Map<string, UserEntity> {
+    const map = new Map<string, UserEntity>();
+    if (!ids || ids.length === 0) return map;
+
+    // Filter unique valid strings
+    const uniqueIds = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.length > 0)));
+    if (uniqueIds.length === 0) return map;
+
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const stmt = this.db.prepare(`
+      SELECT id, username, role, is_active, created_at
+      FROM users
+      WHERE id IN (${placeholders});
+    `);
+    const rows = stmt.all(...uniqueIds) as unknown as UserEntity[];
+    for (const row of rows) {
+      map.set(row.id, row);
+    }
+    return map;
+  }
+
   findUserByUsername(username: string): UserEntity | null {
     const stmt = this.db.prepare(`
       SELECT id, username, role, is_active, created_at

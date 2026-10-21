@@ -24,6 +24,7 @@ import { InvitationService, InvitationError } from '../auth/invitation-service.j
 import { InvitationRepository } from '../db/invitation-repo.js';
 import { ApiKeyService } from '../auth/api-key-service.js';
 import { ApiKeyRepository, ApiKeyWithUserSummary } from '../db/api-key-repo.js';
+import { AuditRepository, AuditStatus } from '../db/audit-repo.js';
 import { DatabaseManager } from '../db/connection.js';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -55,6 +56,42 @@ const CreateKeySchema = z.object({
   expiresInDays: z.number().int().positive().max(365).optional(),
   userId: z.string().optional(),
 });
+
+export const AuditQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1, 'Limit must be >= 1').max(100, 'Limit cannot exceed 100').default(25),
+  offset: z.coerce.number().int().min(0, 'Offset must be >= 0').default(0),
+  status: z.enum([
+    'pending',
+    'success',
+    'failed',
+    'timeout',
+    'client_disconnected',
+    'unconfirmed_outcome',
+  ]).optional(),
+  userId: z.string().uuid('Invalid userId format').optional(),
+});
+
+export interface BrowserAuditDTO {
+  id: string;
+  userId: string | null;
+  username: string | null;
+  upstreamSlug: string | null;
+  toolName: string;
+  status: AuditStatus;
+  durationMs: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: number;
+}
+
+export function sanitizeErrorMessage(msg: string | null | undefined): string | null {
+  if (!msg) return null;
+  return msg
+    .replace(/urumi_[a-zA-Z0-9_]{10,}/g, '[REDACTED_SECRET]')
+    .replace(/bearer\s+[a-zA-Z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
+    .replace(/(password|secret|key|token|credential)\s*[:=]\s*["']?[^"'\s]+["']?/gi, '$1=[REDACTED]')
+    .replace(/https?:\/\/[^:@\s]+:[^@\s]+@/g, 'https://[REDACTED]@');
+}
 
 const DUMMY_SCRYPT_HASH =
   'scrypt$v1$N=16384,r=8,p=1$0000000000000000000000000000000000000000000000000000000000000000$00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
@@ -118,6 +155,7 @@ export interface BrowserRouterOptions {
   apiKeyService?: ApiKeyService;
   apiKeyRepo?: ApiKeyRepository;
   dbManager?: DatabaseManager;
+  auditRepo?: AuditRepository;
 }
 
 export function createBrowserRouter(options: BrowserRouterOptions): Router {
@@ -1005,6 +1043,61 @@ export function createBrowserRouter(options: BrowserRouterOptions): Router {
       });
     } catch (err: unknown) {
       logger.error('Failed to revoke API key', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 19. GET /api/v1/browser/audit
+   * Retrieves paginated, filtered audit logs.
+   * Access: Strictly Admin only. (Members receive 403 Forbidden).
+   */
+  router.get('/audit', sessionAuth, requireRole('admin'), async (req: BrowserRequest, res: Response): Promise<void> => {
+    if (!options.auditRepo) {
+      res.status(501).json({ error: 'Audit repository not configured', code: 'NOT_IMPLEMENTED' });
+      return;
+    }
+
+    const parseResult = AuditQuerySchema.safeParse(req.query);
+    if (!parseResult.success) {
+      res.status(400).json({
+        error: `Invalid query parameters: ${parseResult.error.errors.map((e) => e.message).join(', ')}`,
+        code: 'INVALID_QUERY_PARAMS',
+      });
+      return;
+    }
+
+    const { limit, offset, status, userId } = parseResult.data;
+
+    try {
+      const records = options.auditRepo.listAudits({ limit, offset, status, userId });
+
+      // Resolve usernames in a single batch query (avoiding N+1 queries)
+      const userIds = records
+        .map((r) => r.user_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      const userMap = options.userRepo.findUsersByIds(userIds);
+
+      const audits: BrowserAuditDTO[] = records.map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        username: r.user_id ? userMap.get(r.user_id)?.username ?? null : null,
+        upstreamSlug: r.upstream_slug,
+        toolName: r.tool_name,
+        status: r.status,
+        durationMs: r.duration_ms,
+        errorCode: r.error_code,
+        errorMessage: sanitizeErrorMessage(r.error_message),
+        createdAt: r.created_at,
+      }));
+
+      res.status(200).json({
+        audits,
+        limit,
+        offset,
+      });
+    } catch (err: unknown) {
+      logger.error('Failed to list audits', { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
     }
   });
