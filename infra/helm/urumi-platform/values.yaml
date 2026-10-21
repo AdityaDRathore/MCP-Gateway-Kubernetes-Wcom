@@ -60,7 +60,7 @@ gateway:
   # Comma-separated list of trusted upstream proxy IPs or CIDR blocks for client IP resolution (X-Forwarded-For).
   # The defaults below (localhost and default k3s/k3d pod/service CIDRs 10.42.0.0/16, 10.43.0.0/16)
   # are defaults to validate, not verified production topology. Must be tailored per cluster CNI/ingress topology.
-  trustedProxies: "127.0.0.1,::1,10.42.0.0/16,10.43.0.0/16"
+  trustedProxies: "127.0.0.1,::1,10.42.0.0/16,10.43.0.0/16,172.19.0.0/16"
   serviceAccount:
     name: "urumi-gateway-sa"
   secretsNamespace: "urumi-gateway-secrets"
