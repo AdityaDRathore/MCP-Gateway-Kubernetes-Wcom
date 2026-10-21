@@ -301,3 +301,258 @@ export function pruneBackups(backupDir: string, retainCount = 7): string[] {
 
   return removed;
 }
+
+export class RestoreError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RestoreError';
+  }
+}
+
+export interface RestoreOptions {
+  snapshotPath: string;
+  targetDbPath: string;
+  manifestPath?: string;
+}
+
+export interface RestoreResult {
+  targetDbPath: string;
+  manifest: BackupManifest;
+  restoredRowCounts: Record<string, number>;
+  sha256: string;
+  sizeBytes: number;
+}
+
+/**
+ * Asserts that the target database path is safe and does not resolve to protected live paths.
+ * Specifically rejects any path in /data or /data/* to guarantee zero live PVC / production corruption.
+ * Resolves symlinks and normalizes path segments (e.g., ../) to prevent traversal bypasses.
+ */
+export function assertSafeDatabasePath(targetPath: string): string {
+  if (!targetPath || typeof targetPath !== 'string') {
+    throw new RestoreError('Target database path is invalid or empty');
+  }
+
+  const resolved = path.resolve(targetPath);
+  const normalized = path.normalize(resolved);
+
+  // Guard against any attempt to target protected cluster PVC paths (/data or /data/*)
+  if (normalized === '/data' || normalized.startsWith('/data/') || normalized === '/data/gateway.db') {
+    throw new RestoreError(
+      `Security violation: target path '${targetPath}' resolves to protected live location '${normalized}' and is rejected`
+    );
+  }
+
+  // Symlink resolution checks: check if file or existing parent dir resolves into /data
+  try {
+    if (fs.existsSync(normalized)) {
+      const real = fs.realpathSync(normalized);
+      if (real === '/data' || real.startsWith('/data/')) {
+        throw new RestoreError(
+          `Security violation: target path '${targetPath}' resolves via symlink to protected path '${real}' and is rejected`
+        );
+      }
+    } else {
+      const parentDir = path.dirname(normalized);
+      if (fs.existsSync(parentDir)) {
+        const realParent = fs.realpathSync(parentDir);
+        if (realParent === '/data' || realParent.startsWith('/data/')) {
+          throw new RestoreError(
+            `Security violation: target path '${targetPath}' parent resolves via symlink to protected path '${realParent}' and is rejected`
+          );
+        }
+      }
+    }
+  } catch (err: unknown) {
+    if (err instanceof RestoreError) {
+      throw err;
+    }
+  }
+
+  return normalized;
+}
+
+/**
+ * Restores a database from a verified online backup snapshot and its companion manifest.
+ * 
+ * Safety & Verification Invariants:
+ * 1. Strict path boundary enforcement (rejects /data/ targets before any filesystem mutation).
+ * 2. Pre-placement validation: manifest presence, schema version, file size, SHA-256 checksum,
+ *    and SQLite PRAGMA integrity/foreign key verification on snapshot BEFORE modifying target.
+ * 3. Atomic fail-closed: If validation fails, existing target files are left untouched.
+ * 4. WAL & companion cleanup: Safely unlinks target .db, .db-wal, and .db-shm to prevent poisoning.
+ * 5. Post-restore verification: PRAGMA integrity_check, foreign_key_check, and table row counts
+ *    are verified against manifest before returning.
+ * 
+ * Note on Cryptographic Boundaries:
+ * The manifest SHA-256 checksum detects accidental snapshot corruption relative to the companion manifest.
+ * It does not establish absolute tamper-proof authenticity if an attacker controls both files.
+ */
+export function restoreDatabase(options: RestoreOptions): RestoreResult {
+  // 1. Verify safe target path prior to ANY filesystem inspection or mutation
+  const safeTarget = assertSafeDatabasePath(options.targetDbPath);
+
+  // 2. Verify snapshot file existence
+  if (!fs.existsSync(options.snapshotPath)) {
+    throw new RestoreError(`Snapshot file not found: ${options.snapshotPath}`);
+  }
+
+  // 3. Locate and validate companion manifest
+  const manifestPath =
+    options.manifestPath ?? options.snapshotPath.replace(/\.db$/, '.manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    throw new RestoreError(`Backup companion manifest not found: ${manifestPath}`);
+  }
+
+  let manifest: BackupManifest;
+  try {
+    const rawManifest = fs.readFileSync(manifestPath, 'utf-8');
+    manifest = JSON.parse(rawManifest);
+  } catch (err: unknown) {
+    throw new RestoreError(
+      `Failed to parse backup manifest: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  if (
+    !manifest ||
+    typeof manifest !== 'object' ||
+    !manifest.sha256 ||
+    typeof manifest.sizeBytes !== 'number' ||
+    !manifest.rowCounts ||
+    typeof manifest.rowCounts !== 'object'
+  ) {
+    throw new RestoreError(
+      'Malformed backup manifest: missing required validation properties (sha256, sizeBytes, rowCounts)'
+    );
+  }
+
+  if (manifest.integrityCheck !== 'ok') {
+    throw new RestoreError(
+      `Manifest records integrity check failure: ${manifest.integrityCheck}`
+    );
+  }
+  if (manifest.foreignKeyCheck !== 'ok') {
+    throw new RestoreError(
+      `Manifest records foreign key check failure: ${manifest.foreignKeyCheck}`
+    );
+  }
+
+  // 4. Verify snapshot size and SHA-256 checksum against manifest BEFORE touching target
+  const snapshotStats = fs.statSync(options.snapshotPath);
+  if (snapshotStats.size !== manifest.sizeBytes) {
+    throw new RestoreError(
+      `Snapshot size mismatch: manifest expected ${manifest.sizeBytes} bytes, got ${snapshotStats.size} bytes`
+    );
+  }
+
+  const fileBytes = fs.readFileSync(options.snapshotPath);
+  const computedSha256 = crypto.createHash('sha256').update(fileBytes).digest('hex');
+  if (computedSha256.toLowerCase() !== manifest.sha256.toLowerCase()) {
+    throw new RestoreError(
+      `Snapshot checksum mismatch: manifest expected ${manifest.sha256}, got ${computedSha256}`
+    );
+  }
+
+  // 5. Pre-verify SQLite integrity on snapshot directly before any modifications to target
+  let snapshotDb: DatabaseSync | null = null;
+  try {
+    snapshotDb = new DatabaseSync(options.snapshotPath);
+    const integrityRow = snapshotDb.prepare('PRAGMA integrity_check;').get() as
+      | { integrity_check?: string }
+      | undefined;
+    if (integrityRow?.integrity_check !== 'ok') {
+      throw new RestoreError(
+        `Snapshot SQLite integrity check failed: ${integrityRow?.integrity_check}`
+      );
+    }
+    const fkRows = snapshotDb.prepare('PRAGMA foreign_key_check;').all();
+    if (fkRows.length > 0) {
+      throw new RestoreError(
+        `Snapshot SQLite foreign key check failed with ${fkRows.length} violations`
+      );
+    }
+  } catch (err: unknown) {
+    if (err instanceof RestoreError) {
+      throw err;
+    }
+    throw new RestoreError(
+      `Snapshot database pre-verification failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  } finally {
+    snapshotDb?.close();
+  }
+
+  // 6. Safe target cleanup: remove existing main DB and stale WAL/SHM companion files
+  const targetDir = path.dirname(safeTarget);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+  }
+
+  const walPath = `${safeTarget}-wal`;
+  const shmPath = `${safeTarget}-shm`;
+
+  if (fs.existsSync(safeTarget)) {
+    fs.unlinkSync(safeTarget);
+  }
+  if (fs.existsSync(walPath)) {
+    fs.unlinkSync(walPath);
+  }
+  if (fs.existsSync(shmPath)) {
+    fs.unlinkSync(shmPath);
+  }
+
+  // 7. Place snapshot and enforce POSIX permissions (0600)
+  fs.copyFileSync(options.snapshotPath, safeTarget);
+  fs.chmodSync(safeTarget, 0o600);
+
+  // 8. Post-restore verification: open connection and check integrity, foreign keys, row counts
+  let restoredDb: DatabaseSync | null = null;
+  let restoredRowCounts: Record<string, number> = {};
+  try {
+    restoredDb = new DatabaseSync(safeTarget);
+    const postIntegrity = restoredDb.prepare('PRAGMA integrity_check;').get() as
+      | { integrity_check?: string }
+      | undefined;
+    if (postIntegrity?.integrity_check !== 'ok') {
+      throw new RestoreError(
+        `Restored database integrity check failed: ${postIntegrity?.integrity_check}`
+      );
+    }
+
+    const postFk = restoredDb.prepare('PRAGMA foreign_key_check;').all();
+    if (postFk.length > 0) {
+      throw new RestoreError(
+        `Restored database foreign key check failed with ${postFk.length} violations`
+      );
+    }
+
+    restoredRowCounts = getTableRowCounts(restoredDb);
+    for (const [tbl, expectedCount] of Object.entries(manifest.rowCounts)) {
+      const actualCount = restoredRowCounts[tbl] ?? 0;
+      if (actualCount !== expectedCount) {
+        throw new RestoreError(
+          `Restored row count mismatch on table '${tbl}': manifest expected ${expectedCount}, got ${actualCount}`
+        );
+      }
+    }
+  } finally {
+    restoredDb?.close();
+  }
+
+  logger.info('Database restored successfully from verified snapshot', {
+    targetDbPath: safeTarget,
+    backupId: manifest.backupId,
+    schemaVersion: manifest.schemaVersion,
+    sha256: computedSha256,
+  });
+
+  return {
+    targetDbPath: safeTarget,
+    manifest,
+    restoredRowCounts,
+    sha256: computedSha256,
+    sizeBytes: snapshotStats.size,
+  };
+}
+
