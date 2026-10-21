@@ -41,6 +41,8 @@ gateway:
   replicas: 1
   k8sApiClusterIp: "10.43.0.1/32"
   k8sControlPlaneEndpoint: "172.19.0.2/32"
+  # Default local k3d pod and service CIDR proxy defaults (subject to runtime verification)
+  trustedProxies: "127.0.0.1,::1,10.42.0.0/16,10.43.0.0/16"
   resources:
     requests:
       cpu: "50m"

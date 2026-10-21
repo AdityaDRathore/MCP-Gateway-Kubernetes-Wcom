@@ -272,6 +272,61 @@ describe('Invitation Lifecycle and Concurrency Unit Tests (P5-G4)', () => {
     assert.strictEqual(invRecord?.redeemed_at, null, 'Invitation must remain unredeemed');
   });
 
+  it('rolls back completely if session creation fails, leaving user uncreated and invitation unredeemed (Condition 1)', async () => {
+    const inv = invitationService.createInvitation({ role: 'member' });
+
+    // Inject a failure into session creation (synchronous session creation failure)
+    const origCreateSessionSync = sessionService.createSessionSync.bind(sessionService);
+    sessionService.createSessionSync = () => {
+      throw new Error('Simulated session insert failure: SQLite table lock / disk full');
+    };
+
+    await assert.rejects(
+      async () => {
+        await invitationService.redeemInvitation({
+          token: inv.rawToken,
+          username: 'session_fail_user',
+          password: 'Password12345!',
+        });
+      },
+      (err: unknown) => {
+        return err instanceof Error && err.message.includes('Simulated session insert failure');
+      }
+    );
+
+    // Restore original session creation method
+    sessionService.createSessionSync = origCreateSessionSync;
+
+    // 1. Verify user record was NOT created in users table
+    const user = userRepo.findUserByUsername('session_fail_user');
+    assert.strictEqual(user, null, 'User creation must be rolled back');
+
+    // 2. Verify credentials were NOT created
+    const credCount = db.prepare('SELECT count(*) as count FROM user_credentials WHERE password_hash LIKE ?;').get('%') as any;
+    assert.strictEqual(credCount.count, 0, 'Credentials must not be persisted');
+
+    // 3. Verify session was NOT created
+    const sessionCount = db.prepare('SELECT count(*) as count FROM browser_sessions;').get() as any;
+    assert.strictEqual(sessionCount.count, 0, 'Session must not be persisted');
+
+    // 4. Verify invitation remains UNREDEEMED and valid
+    const invRecord = invitationRepo.findInvitationById(inv.id);
+    assert.ok(invRecord);
+    assert.strictEqual(invRecord.redeemed_at, null, 'Invitation must remain unredeemed');
+    assert.strictEqual(invRecord.redeemed_by_user_id, null);
+
+    // 5. Subsequent redemption of the SAME invitation token now succeeds cleanly
+    const retryResult = await invitationService.redeemInvitation({
+      token: inv.rawToken,
+      username: 'session_fail_user',
+      password: 'Password12345!',
+    });
+    assert.ok(retryResult.user);
+    assert.strictEqual(retryResult.user.username, 'session_fail_user');
+    assert.ok(retryResult.session);
+    assert.ok(retryResult.session.rawToken);
+  });
+
   it('canary secret test: database never stores raw invitation tokens or plaintext passwords', async () => {
     const canaryTokenPrefix = 'urumi_inv_';
     const canaryPlaintextPassword = 'TopSecretCanaryPassword999!';

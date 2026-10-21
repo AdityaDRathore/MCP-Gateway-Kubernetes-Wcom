@@ -49,6 +49,8 @@ gateway:
   # to prevent database locking and multi-writer corruption.
   k8sApiClusterIp: "10.43.0.1/32"
   k8sControlPlaneEndpoint: "10.43.0.1/32"
+  # Candidate trusted proxy topology for production/VPS (to be validated against actual cluster CNI/Ingress)
+  trustedProxies: "127.0.0.1,::1,10.42.0.0/16,10.43.0.0/16"
   resources:
     requests:
       cpu: "100m"

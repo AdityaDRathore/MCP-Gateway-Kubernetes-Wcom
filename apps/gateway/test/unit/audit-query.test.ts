@@ -335,4 +335,43 @@ describe('Audit Log Query & Bounded Pagination Unit Tests (P5-G5)', () => {
     assert.ok(!secRec.errorMessage.includes('pass123'));
     assert.match(secRec.errorMessage, /\[REDACTED/);
   });
+
+  it('AUD-UNIT-09: verifies EXPLAIN QUERY PLAN uses composite indexes without unindexed table scans', () => {
+    // 1. Unfiltered paginated query plan (ordered by created_at DESC, id DESC)
+    const unfilteredPlan = db.prepare(
+      'EXPLAIN QUERY PLAN SELECT * FROM audit_logs ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?;'
+    ).all() as any[];
+    assert.ok(unfilteredPlan.length > 0);
+    const unfilteredDetails = unfilteredPlan.map((p) => p.detail).join('; ');
+    assert.match(unfilteredDetails, /USING INDEX idx_audit_created_id/);
+    assert.doesNotMatch(unfilteredDetails, /SCAN audit_logs\b(?!\s+USING INDEX)/);
+
+    // 2. Status filtered paginated query plan
+    const statusPlan = db.prepare(
+      'EXPLAIN QUERY PLAN SELECT * FROM audit_logs WHERE status = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?;'
+    ).all() as any[];
+    assert.ok(statusPlan.length > 0);
+    const statusDetails = statusPlan.map((p) => p.detail).join('; ');
+    assert.match(statusDetails, /USING INDEX idx_audit_status_created_id/);
+    assert.doesNotMatch(statusDetails, /SCAN audit_logs\b(?!\s+USING INDEX)/);
+
+    // 3. User filtered paginated query plan
+    const userPlan = db.prepare(
+      'EXPLAIN QUERY PLAN SELECT * FROM audit_logs WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?;'
+    ).all() as any[];
+    assert.ok(userPlan.length > 0);
+    const userDetails = userPlan.map((p) => p.detail).join('; ');
+    assert.match(userDetails, /USING INDEX idx_audit_user_created/);
+    assert.doesNotMatch(userDetails, /SCAN audit_logs\b(?!\s+USING INDEX)/);
+
+    // 4. Status and user filtered paginated query plan
+    const combinedPlan = db.prepare(
+      'EXPLAIN QUERY PLAN SELECT * FROM audit_logs WHERE status = ? AND user_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?;'
+    ).all() as any[];
+    assert.ok(combinedPlan.length > 0);
+    const combinedDetails = combinedPlan.map((p) => p.detail).join('; ');
+    assert.match(combinedDetails, /USING INDEX (idx_audit_status_created_id|idx_audit_user_created)/);
+    assert.doesNotMatch(combinedDetails, /SCAN audit_logs\b(?!\s+USING INDEX)/);
+  });
 });
+

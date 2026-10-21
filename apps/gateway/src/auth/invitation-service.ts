@@ -234,9 +234,10 @@ export class InvitationService {
     // 3. Password Hashing (Outside transaction to preserve condition 2)
     const passwordHash = await this.passwordService.hashPassword(password);
 
-    // 4. Atomic Transaction execution
+    // 4. Atomic Transaction execution (User + Credentials + Invitation Redemption + Session Creation)
     const userId = crypto.randomUUID();
     let createdUser: UserEntity | null = null;
+    let sessionResult: CreateSessionResult | null = null;
 
     this.runTransaction(() => {
       // Check username uniqueness inside transaction
@@ -275,14 +276,14 @@ export class InvitationService {
       if (!marked) {
         throw new InvitationError('INVITATION_INVALID', 'Invitation was concurrently redeemed', 400);
       }
+
+      // 5. Atomically create active session for the newly registered user inside the transaction
+      sessionResult = this.sessionService.createSessionSync(userId, meta);
     });
 
-    if (!createdUser) {
-      throw new InvitationError('INTERNAL_ERROR', 'Failed to create user', 500);
+    if (!createdUser || !sessionResult) {
+      throw new InvitationError('INTERNAL_ERROR', 'Failed to complete user registration', 500);
     }
-
-    // 5. Create active session for the newly registered user
-    const sessionResult = await this.sessionService.createSession(userId, meta);
 
     logger.info('Invitation redeemed successfully', {
       userId,

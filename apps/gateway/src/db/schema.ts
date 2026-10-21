@@ -55,6 +55,10 @@ export const migration001: Migration = {
 
     CREATE INDEX IF NOT EXISTS idx_audit_status_created ON audit_logs(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_user_created ON audit_logs(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_user_created_id ON audit_logs(user_id, created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_audit_status_created_id ON audit_logs(status, created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_audit_created_id ON audit_logs(created_at, id);
   `,
 };
 
@@ -127,6 +131,12 @@ export const migration003: Migration = {
     );
 
     CREATE INDEX IF NOT EXISTS idx_invitations_token_hash ON user_invitations(token_hash);
+
+    -- 5. Audit query performance indexes
+    CREATE INDEX IF NOT EXISTS idx_audit_user_created ON audit_logs(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_user_created_id ON audit_logs(user_id, created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_audit_status_created_id ON audit_logs(status, created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_audit_created_id ON audit_logs(created_at, id);
   `,
 };
 

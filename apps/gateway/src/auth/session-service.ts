@@ -43,12 +43,13 @@ export class SessionService {
   }
 
   /**
-   * Creates a new authenticated browser session for an active user.
+   * Synchronously creates a new authenticated browser session for an active user.
+   * Can be executed safely within an active SQLite transaction.
    */
-  public async createSession(
+  public createSessionSync(
     userId: string,
     meta: { userAgent?: string; ipAddress?: string } = {}
-  ): Promise<CreateSessionResult> {
+  ): CreateSessionResult {
     const user = this.userRepo.findUserById(userId);
     if (!user) {
       throw new Error(`Cannot create session: User '${userId}' does not exist`);
@@ -84,6 +85,16 @@ export class SessionService {
       rawToken,
       csrfToken: csrfSecret,
     };
+  }
+
+  /**
+   * Creates a new authenticated browser session for an active user (async compatibility wrapper).
+   */
+  public async createSession(
+    userId: string,
+    meta: { userAgent?: string; ipAddress?: string } = {}
+  ): Promise<CreateSessionResult> {
+    return this.createSessionSync(userId, meta);
   }
 
   /**
