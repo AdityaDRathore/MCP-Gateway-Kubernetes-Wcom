@@ -252,8 +252,84 @@ npm run --workspaces --if-present build
 
 ## 7. Submission & Gate P5-G6 Readiness
 
-All Stage 2 implementation work authorized under Gate P5-G5 has been completed and verified offline. The repository working tree is ready for commit.
+All Stage 2 implementation work authorized under Gate P5-G5 has been completed and verified offline. The implementation was cleanly committed to `main` as commit `20e918d`.
 
 Upon Technical Head acceptance of Gate P5-G5:
 - **Next Gate:** **P5-G6 — System Hardening, Integration, and Production Verification**.
 - **Stage 3/4/5/6 Boundaries:** Remain strictly **ON HOLD** pending formal authorization.
+
+---
+
+## 8. Addendum — Technical Head Evidence Reconciliation & Gate Closeout
+
+This addendum records the formal Technical Head evidence reconciliation and closeout for **Gate P5-G5 (Audit Log and Operational Feedback)**:
+
+### 8.1 Implementation Commit & Working Tree Verification
+- **Baseline Git SHA:** `bca8466` (`ph 5: docs: add Gate P5-G4 Stage 2 evidence reconciliation addendum`).
+- **Implementation Commit SHA:** `20e918d` (`ph 5: feat(gateway,dashboard): implement Gate P5-G5 audit log read API and live dashboard integration`).
+- **Current Working Tree:** Clean on branch `main` (`nothing to commit, working tree clean`).
+- **Committed Artifacts in `20e918d`:**
+  - `apps/gateway/src/db/audit-repo.ts`: Added secondary unique tie-breaker `id DESC` to `ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?;`.
+  - `apps/gateway/src/db/user-repo.ts`: Implemented `findUsersByIds()` single batch query (`WHERE id IN (...)`) for N+1 prevention.
+  - `apps/gateway/src/http/browser.ts`: Added `AuditQuerySchema`, `sanitizeErrorMessage()`, safe `BrowserAuditDTO` projection, and mounted `GET /api/v1/browser/audit` under `sessionAuth` and `requireRole('admin')`.
+  - `apps/gateway/src/server.ts` & `apps/gateway/src/index.ts`: Wired `auditRepo` into browser server options and routing.
+  - `apps/dashboard/src/components/AuditTab.tsx`: Dynamic fetch integration, loading/empty/error states, limit/offset pagination, status badge styling, and operational degradation warning banner.
+  - `apps/gateway/test/unit/audit-query.test.ts`: 8 unit tests covering bounds, rejection, deterministic pagination, filtering, batch username resolution, and DTO projection.
+  - `apps/gateway/test/protocol/audit-security.test.ts`: 7 protocol tests covering anonymous 401, member 403, admin 200, cross-auth rejection, canary secret redaction, and truthful operational status reporting.
+
+### 8.2 Categorized Verification & Evidence Distinctions
+In accordance with Technical Head review protocols, project evidence is explicitly categorized across verified facts, submitted claims, rerun tests, conditionally accepted items, and unauthorized operations:
+
+1. **Verified Facts from Source & Repository Inspection:**
+   - Inspection of `apps/gateway/src/http/browser.ts` (lines 60–94, 1055–1103) confirms `GET /audit` requires `sessionAuth` and `requireRole('admin')`. Member sessions receive HTTP 403 Forbidden with empty body.
+   - Inspection of `apps/gateway/src/http/browser.ts` confirms `BrowserAuditDTO` explicitly projects only public fields, completely omitting `arguments_hash`, `raw_arguments`, and `tool_results`.
+   - Inspection of `sanitizeErrorMessage()` confirms active regex scrubbing of `urumi_` bearer tokens, Basic Auth URL credentials, and secret parameters (`password=`, `token=`).
+   - Inspection of `apps/gateway/src/db/audit-repo.ts` (lines 107–138) confirms query bounds and deterministic sorting (`ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?;`).
+   - Inspection of `apps/dashboard/src/components/AuditTab.tsx` confirms replacement of mock data with live fetch to `/api/v1/browser/audit`, status badge styling, pagination controls, and operator alert banner for degraded finalizations (`hasDegradedFinalization = audits.some(a => a.status === 'unconfirmed_outcome' || a.errorCode === 'FINALIZATION_TIMEOUT')`).
+   - Inspection of `apps/gateway/src/services/audit.ts` confirms write methods `startAudit()` and `finalizeAudit()` remain completely unmodified.
+
+2. **Claims Made in Submitted Implementation Report:**
+   - 471 monorepo tests passing across 4 workspaces (329 gateway, 26 CRM, 35 Tasks, 81 WooCommerce).
+   - Zero lint errors and successful monorepo builds across all packages.
+
+3. **Tests Actually Rerun During Technical Head Review:**
+   - `npx tsx --test test/unit/audit-query.test.ts test/protocol/audit-security.test.ts`: **15 passed**, 0 failed (duration: 1.65s).
+   - `npm --prefix apps/gateway run test:unit`: **304 passed**, 0 failed across 41 test suites (duration: 13.23s).
+   - `npm --prefix apps/gateway run test:protocol`: **25 passed**, 0 failed across 8 test suites (duration: 14.05s).
+   - **Gateway Workspace Total Verified:** **329 passed**, 0 failed.
+   - `npm run --workspaces --if-present build`: Clean build verified across all packages (`@urumi/shared`, `gateway`, `mcp-crm`, `mcp-tasks`, `woocommerce-mcp`, and `dashboard` Vite production bundle built in 2.06s).
+
+4. **Items Accepted Conditionally (Offline Verified, Awaiting Live Verification in G6):**
+   - High-throughput pagination performance over large historical datasets (>100k records in live SQLite). Verified offline against 60 seeded records with identical second timestamps.
+   - Live Ingress routing of `/api/v1/browser/audit` through Kubernetes nginx ingress controller to port 3001. Verified offline on Node HTTP server instance.
+   - Real-world operator feedback banner display under live cluster network partitions. Verified offline via protocol fault injection.
+
+5. **Explicitly Prohibited & Unauthorized Checks (Zero Execution):**
+   - No Docker container image build or push.
+   - No live database migration, restore, write, or PVC access against `/data/gateway.db`.
+   - No Kubernetes mutations, pod rollouts, pod restarts, or Helm upgrades/rollbacks.
+   - No VPS or production deployment.
+
+### 8.3 Fulfillment of Technical Head Conditions
+
+| # | Condition | Fulfillment Status | Verifiable Evidence |
+|---|---|---|---|
+| 1 | Preserve Audit Write Path | **FULFILLED** | `AuditService.startAudit()` and `finalizeAudit()` untouched. Write path intact. |
+| 2 | Auth Partitioning | **FULFILLED** | Browser cookies rejected at `/mcp` (401); MCP bearer keys rejected at `/browser/audit` (401). |
+| 3 | Protect Sensitive Data | **FULFILLED** | `arguments_hash` omitted from DTO; `sanitizeErrorMessage()` scrubs credentials; canary token verified redacted. |
+| 4 | Truthful Audit Outcomes | **FULFILLED** | Pending/unconfirmed states projected truthfully without fabricated durations; warning banner in UI. |
+| 5 | Explicit Query Contract | **FULFILLED** | Bounded pagination (limit 1-100 default 25, offset >= 0); invalid inputs reject with HTTP 400. |
+| 6 | Deterministic Pagination | **FULFILLED** | Ordered by `created_at DESC, id DESC`. Verified stable pagination across duplicate timestamps. |
+| 7 | Zero N+1 Queries | **FULFILLED** | Implemented `UserRepository.findUsersByIds()` executing single `WHERE id IN (...)` batch query. |
+
+### 8.4 Residual Risks & Deferred Scope for Gate P5-G6
+The following items carry no blocker risk for G5 offline completion and are formally deferred to **Gate P5-G6 (System Hardening, Integration, and Production Verification)**:
+1. **Live Ingress & Port Partitioning Verification:** Verify that external traffic to `gateway.local` properly routes Port 3000 (`/mcp`) and Port 3001 (`/api/v1/browser/*` and dashboard SPA) without port-collision or header leakage in the live cluster.
+2. **Cluster-Level Integration Canary Scans:** Execute full end-to-end canary tool executions through the live gateway and verify that live cluster log aggregators and SQLite databases maintain zero secret leakage.
+3. **WooCommerce Storefront Baseline Verification:** Re-verify Product IDs 10, 11, 12 and Order #14 data invariants against the live WooCommerce service before and after G6 test suites.
+
+### 8.5 Formal Closeout Declaration
+Gate P5-G5 has satisfied all Stage 1 planning, Stage 2 implementation, and Stage 2 evidence reconciliation requirements.
+
+- **Gate P5-G5 Status:** **CLOSED AND ACCEPTED**.
+- **Next Step:** Proceed to **Gate P5-G6 Stage 1: System Hardening, Integration, and Production Verification Planning**.
