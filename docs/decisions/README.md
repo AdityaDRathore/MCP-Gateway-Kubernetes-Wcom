@@ -26,6 +26,7 @@ This directory contains the formal Architecture Decision Records for the Urumi E
 | [`ADR-018`](./ADR-018-upstream-mock-contracts-crm-and-tasks.md) | High-Fidelity Mock Upstreams for Enterprise CRM & Task Systems | Accepted | 2026-10-17 | Upstream Integrations |
 | [`ADR-019`](./ADR-019-browser-identity-session-and-csrf.md) | Browser Identity, Session Management, Scrypt KDF, and CSRF Defense | Accepted | 2026-10-21 | Dashboard Security |
 | [`ADR-020`](./ADR-020-dual-listener-and-ingress-perimeter.md) | Dual-Listener Architecture and Ingress Perimeter Security | Accepted | 2026-10-21 | Gateway Architecture |
+| [`ADR-021`](./ADR-021-in-dashboard-chat-agent-and-mutation-confirmation.md) | In-Dashboard Chat Agent, Model Provider Abstraction, and Mutation Confirmation Lifecycle | Accepted | 2026-10-22 | AI Agent & Security |
 
 ---
 

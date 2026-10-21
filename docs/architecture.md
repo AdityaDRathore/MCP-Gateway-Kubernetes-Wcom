@@ -193,10 +193,82 @@ flowchart TD
 - [**ADR-018**](decisions/ADR-018-upstream-mock-contracts-crm-and-tasks.md): Upstream Mock Services Architecture: Synthetic CRM and In-Memory Tasks Contracts
 - [**ADR-019**](decisions/ADR-019-browser-identity-session-and-csrf.md): Browser Identity, Scrypt Password KDF, Opaque Session Tokens, and Dual-Layer CSRF Protection
 - [**ADR-020**](decisions/ADR-020-dual-listener-and-ingress-perimeter.md): Dual-Listener Architecture and Public Ingress Perimeter Isolation
+- [**ADR-021**](decisions/ADR-021-in-dashboard-chat-agent-and-mutation-confirmation.md): In-Dashboard Chat Agent, Model Provider Abstraction, and Mutation Confirmation Lifecycle
 
 ---
 
-## 5. Comprehensive Study & Technical Context Manuals
+## 5. Phase 6 AI Agent & External MCP Architecture
+
+Phase 6 introduces natural language AI agent capabilities into the platform across two distinct consumption models: human operators via the web dashboard and external AI clients via the downstream MCP protocol endpoint.
+
+```mermaid
+flowchart TD
+    subgraph HumanPerimeter ["Perimeter 1: Browser Dashboard (Port 3001)"]
+        BrowserUser["Authenticated Team Member<br/>(Session Cookie + CSRF)"]
+        ChatUI["Dashboard AI Assistant Tab<br/>(React 19 Ephemeral State)"]
+        BrowserChatAPI["Browser Chat API<br/>POST /api/v1/browser/chat<br/>POST /api/v1/browser/chat/confirm"]
+    end
+
+    subgraph MachinePerimeter ["Perimeter 2: External MCP Client (Port 3000)"]
+        ExternalClient["External MCP Client<br/>(Claude Code, Cursor, MCP Inspector)"]
+        DownstreamMCP["Downstream MCP Protocol (/mcp)<br/>Streamable HTTP + Bearer API Key"]
+    end
+
+    subgraph AgentCore ["Team MCP Gateway Core Engine"]
+        ProviderAdapter["ModelProvider Layer<br/>• GeminiProviderAdapter (Google GenAI SDK)<br/>• DeterministicMockProviderAdapter (Hermetic Tests)"]
+        AgentLoop["Bounded Agent Loop Orchestrator<br/>• 5-Iteration Turn Cap<br/>• 30s End-to-End Turn Deadline<br/>• 64 KiB Result Truncation<br/>• Untrusted Tool Output Wrapping"]
+        ConfirmationEngine["Mutation Confirmation Engine<br/>• HMAC-SHA256 Token (60s TTL, Single-Use Nonce)<br/>• Protected Records Guard (Order 14, Products 10-12)<br/>• Disposable Demo Fixture Exemption (/^chat-demo-/)"]
+        Router["ToolRouter & Concurrency Pool<br/>(20 Global / 4 per Upstream FIFO)"]
+        Audit["Two-Phase Audit Service<br/>(SQLite PVC: user_id, tool, duration, SHA-256 args)"]
+    end
+
+    subgraph UpstreamCluster ["Cluster-Internal Upstream MCP Servers"]
+        UpstreamWoo["WooCommerce MCP (5 tools)"]
+        UpstreamCRM["CRM MCP (2 tools)"]
+        UpstreamTasks["Tasks MCP (3 tools)"]
+    end
+
+    BrowserUser -->|Session Cookie + CSRF| ChatUI
+    ChatUI --> BrowserChatAPI
+    BrowserChatAPI -->|Derive Actor: session.user| AgentLoop
+    AgentLoop <-->|generateChatTurn()| ProviderAdapter
+    AgentLoop -->|Mutating Tool?| ConfirmationEngine
+    ConfirmationEngine -.->|Pending Token (60s TTL)| ChatUI
+    AgentLoop -->|Permitted / Confirmed| Router
+    Router -->|Phase 1 & 2 Log (user_id = actor)| Audit
+    Router --> UpstreamWoo
+    Router --> UpstreamCRM
+    Router --> UpstreamTasks
+
+    ExternalClient -->|Authorization: Bearer <key>| DownstreamMCP
+    DownstreamMCP -->|tools/list, tools/call| Router
+```
+
+### 5.1 Architecture Highlights
+
+1. **Model Provider Abstraction Layer**:
+   - Isolates the gateway from specific model vendor SDK quirks via `ModelProvider` interface (`generateChatTurn`).
+   - Production adapter (`GeminiProviderAdapter`) supports Gemini models (`gemini-flash-lite-latest`, `gemini-2.5-flash`), maintains reasoning context (`thoughtSignature`), translates tool schemas, and standardizes error mappings (`ProviderError` hierarchy).
+   - Test adapter (`DeterministicMockProviderAdapter`) enables fast, zero-credential hermetic testing.
+2. **Bounded Agent Loop State Machine**:
+   - Caps conversational multi-turn tool loops at **5 iterations per turn** (`LOOP_ITERATION_LIMIT_EXCEEDED`).
+   - Bounds total turn duration at **30 seconds** (`PROVIDER_TIMEOUT`).
+   - Truncates oversized tool payloads at **64 KiB**.
+   - Treats tool outputs as untrusted third-party data via fenced markdown blocks, preventing prompt injection attacks.
+3. **Server-Side Mutation Confirmation Engine**:
+   - Hard-blocks state modifications against immutable baseline records: **Order #14 and Product IDs 10, 11, 12**.
+   - Enforces an approved **disposable demo fixture exemption**: `woocommerce__create_product` with SKU matching `/^chat-demo-[a-z0-9_-]+$/` executes autonomously.
+   - For all other mutations, mints a tamper-proof HMAC-SHA256 confirmation token with a 60-second TTL and single-use nonce, strictly verifying that the confirming user matches the initiating session actor.
+4. **Permanent Audit Attribution**:
+   - Every tool call executed by the in-dashboard agent loop or an external MCP client is logged to the SQLite WAL `audit_logs` table with exact caller identity (`user_id`), tool name, millisecond duration, status, and deterministic SHA-256 argument hash.
+5. **Dual-Perimeter Boundary Enforcement**:
+   - Browser cookies cannot access `/mcp` on Port 3000 (HTTP 401).
+   - MCP Bearer keys cannot access `/api/v1/browser/*` on Port 3001 (HTTP 401).
+   - Inactive or deactivated accounts fail closed on both perimeters.
+
+---
+
+## 6. Comprehensive Study & Technical Context Manuals
 
 For deep-dive educational walkthroughs, conceptual textbooks, and complete system breakdown references, refer to the self-study documentation packages:
 

@@ -42,7 +42,7 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 
 ---
 
-## Current Status: Phase 5 Complete (Team Platform, Browser Dashboard, Scrypt Session Auth & Ingress Perimeter)
+## Current Status: Phase 6 Complete (In-Dashboard AI Assistant, Model Provider Abstraction, Mutation Confirmation & External MCP Interoperability)
 
 - **Phase 1 (Foundation & Scaffolding)**:
   - **Node.js LTS**: Pinned to **Node.js 24 LTS (`v24.20.0`)** via `.nvmrc` and `engines`.
@@ -83,6 +83,14 @@ For full system architecture, network boundaries, and resource budgeting, see [`
     - **API Key Self-Service**: Members and admins generate scoped API keys. Raw plaintext key is returned exactly once; only SHA-256 hashes are persisted. Immediate revocation invalidates key on the very next MCP request.
   - **Audit Trail Viewer**: Paginated, filterable audit log reader (`/api/v1/browser/audit`) restricted to Admin role, with sanitized error messages and deterministic argument hashes.
   - **Empirical Deployment & Acceptance**: Deployed to `k3d-urumi` under Helm release `urumi-store` (Revision 10) with image `urumi-gateway:1.0.0` (`sha256:4cc76d09366b0d458ce59da1799dcfacfb063d2ba0409b21ee97b1111c05ef2b`). 28 of 28 live runtime acceptance tests pass; zero drift on protected WooCommerce records (Products 10, 11, 12 and Order #14).
+- **Phase 6 (In-Dashboard AI Assistant, Model Provider Abstraction, Mutation Confirmation & External MCP Interoperability)**:
+  - **In-Dashboard AI Assistant**: Mounted as the "AI Assistant" tab in the React 19 dashboard (`ChatTab.tsx`), supporting conversational turns, real-time tool badges with millisecond durations, expandable argument/result inspection, and interactive mutation confirmation cards with ephemeral React state.
+  - **Model Provider Abstraction Layer**: Centralized `ModelProvider` interface (`apps/gateway/src/chat/types.ts`) supporting official Google GenAI Gemini models (`GeminiProviderAdapter` with reasoning `thoughtSignature` preservation and tool schema normalization) and hermetic mock provider (`DeterministicMockProviderAdapter`) for zero-credential testing.
+  - **Bounded Agent Loop State Machine**: Enforces a strict 5-iteration cap per turn (`LOOP_ITERATION_LIMIT_EXCEEDED`), a 30-second end-to-end deadline (`PROVIDER_TIMEOUT`), sequential tool execution via `ToolRouter.dispatch()`, 64 KiB tool payload truncation, untrusted tool output markdown isolation, and dual secret/PII regex redaction.
+  - **Server-Side Mutation Confirmation Engine**: HMAC-SHA256 signed confirmation tokens (60s TTL, single-use nonce, canonical argument hashing, user session binding) protecting baseline WooCommerce records (**Order #14 and Product IDs 10, 11, 12**). Approved disposable demo fixture exemption for product creation with SKU matching `/^chat-demo-[a-z0-9_-]+$/`.
+  - **Permanent Audit Attribution**: In-dashboard chat tool executions derive caller identity directly from browser sessions, recording full audit attribution (`user_id`, tool name, duration, SHA-256 argument hash) in persistent SQLite storage.
+  - **External MCP Client Interoperability**: Downstream Streamable HTTP `/mcp` endpoint verified with official MCP SDK clients and Inspector. Demonstrates 10-tool multi-upstream discovery, read-only order inspection without PII, and multi-turn cross-server workflows (`crm__search_contacts` + `tasks__list_tasks`) driven by a single natural-language prompt.
+  - **Cross-Path Security Verification**: 28 automated protocol tests verify perimeter isolation (tokens non-substitutable), CSRF/Origin enforcement, RBAC, IDOR protection, inactive account fail-closed, secret isolation, and provider error status code mappings (503, 504, 429, 502). Zero regressions across 351 unit tests and 62 protocol tests.
 
 
 ---
