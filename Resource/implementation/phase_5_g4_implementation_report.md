@@ -3,7 +3,7 @@
 
 - **Date:** 2026-10-21
 - **Environment:** Local / Offline Development Environment (Node 24 LTS, Linux)
-- **Branch:** `main` (commit SHA: `a38331a`)
+- **Branch:** `main` (Baseline: `a38331a`, Implementation Commit: `c43b825`)
 - **Scope Authority:** Gate P5-G4 Stage 2 Authorized with Conditions by Technical Head
 - **Status:** **COMPLETE & VERIFIED — READY FOR TECHNICAL HEAD REVIEW (STAGE 3/4/5/6 ON HOLD)**
 
@@ -243,3 +243,74 @@ Untracked files:
   - Zero Docker container images built or pushed to any registry.
   - Zero pod restarts or VPS deployments.
 - **Pending Review:** Gate P5-G4 final acceptance remains on HOLD pending formal Technical Head review of this implementation report and test evidence.
+
+---
+
+## 7. Addendum — Technical Head Evidence Reconciliation
+
+This addendum resolves the evidence reconciliation items requested in the Technical Head's Stage 2 review:
+
+### 7.1 Commit State & Current HEAD SHA Reconciliation
+- **Baseline Git SHA:** `a38331a` (state prior to uncommitted Stage 2 edits).
+- **Implementation Commit SHA:** `c43b8254d35616b9c0b56e74b2cad02d3aad16aa` (short: `c43b825`).
+- **Commit Message:** `ph 5: feat(gateway): implement P5-G4 bootstrap admin CLI, invitation management, and secure token lifecycle`
+- **Current Working Tree Status:**
+  ```
+  On branch main
+  Your branch is up to date with 'origin/main'.
+  nothing to commit, working tree clean
+  ```
+- **Reconciliation Note:** All 17 implementation files, test suites, CLI tools, and documentation are committed cleanly under `c43b825`. The prior discrepancy between the clean baseline commit `a38331a` and the uncommitted files in Section 5.3 is fully reconciled by commit `c43b825`.
+
+### 7.2 Final Test Execution & Monorepo Totals
+A fresh, comprehensive test run was executed on clean HEAD `c43b825` across all workspaces:
+
+1. **`apps/gateway`:**
+   - Command: `export PATH="/home/rathore/.nvm/versions/node/v24.20.0/bin:$PATH" && npm run --workspace=apps/gateway test`
+   - Unit tests: 296 passed, 0 failed (40 test suites)
+   - Protocol tests: 18 passed, 0 failed (7 test suites)
+   - Gateway Total: **314 passed**, 0 failed (Exit code: 0)
+
+2. **`apps/mcp-crm`:**
+   - Command: `npm run --workspace=apps/mcp-crm test`
+   - Unit: 20 passed, Protocol: 6 passed, Total: **26 passed**, 0 failed (Exit code: 0)
+
+3. **`apps/mcp-tasks`:**
+   - Command: `npm run --workspace=apps/mcp-tasks test`
+   - Unit: 27 passed, Protocol: 8 passed, Total: **35 passed**, 0 failed (Exit code: 0)
+
+4. **`apps/woocommerce-mcp`:**
+   - Command: `npm run --workspace=apps/woocommerce-mcp test`
+   - Unit: 46 passed, Protocol: 35 passed, Total: **81 passed**, 0 failed (Exit code: 0)
+
+**Monorepo Verification Result:** Exactly **456 tests passed out of 456** across all workspaces with 0 failures, 0 skipped, and 0 cancellations in the same verified workspace.
+
+### 7.3 Atomicity of Invitation Redemption, Session Issuance, and Consumption
+- **Pre-Transaction Hashing:** Scrypt password hashing is executed *prior* to beginning the SQLite transaction to avoid holding locks during cryptographic computation.
+- **Atomic Database Transaction (`BEGIN IMMEDIATE`):**
+  1. Validates token hash, expiration (`expires_at > now`), and unredeemed status (`redeemed_at IS NULL`).
+  2. Executes single-use consumption: `UPDATE user_invitations SET redeemed_at = ?, redeemed_by_user_id = ? WHERE id = ? AND redeemed_at IS NULL`. Throws `INVITATION_ALREADY_REDEEMED` if affected rows is 0.
+  3. Verifies username uniqueness in `users`.
+  4. Inserts user row into `users` (`is_active = 1`).
+  5. Inserts credentials row into `user_credentials`.
+  6. Commits transaction (`COMMIT`).
+- **Rollback Guarantee:** If any error occurs inside the transaction block, `ROLLBACK` executes immediately. No partial user, credential, or invitation records are persisted.
+- **Session Issuance Separation:** `sessionService.createSession(userId, meta)` is called strictly *after* successful transaction commit.
+- **Empirical Proof:**
+  - `invitation-lifecycle.test.ts` (Test 4): 10 concurrent requests against a single invitation token resulted in exactly 1 success (201) and 9 rejections (400), proving single-use race safety.
+  - `invitation-lifecycle.test.ts` (Test 8): Injected failure during transaction verified complete rollback: 0 users inserted, 0 sessions created, invitation remained unredeemed.
+
+### 7.4 Disposable Migration Isolation & Zero PVC Interaction
+- **Isolated Sandbox:** `disposable-migration.test.ts` operates strictly inside a temporary directory created via `fs.mkdtempSync(path.join(os.tmpdir(), 'urumi-disposable-migration-'))`.
+- **Database Scope:** Operates on `/tmp/urumi-disposable-migration-XXXXXX/disposable.db`.
+- **Verification Chain:**
+  1. Applies Migration 001 and 002.
+  2. Seeds baseline records across `users`, `api_keys`, `upstreams`, and `audit_logs`.
+  3. Executes `createDatabaseBackup()` to a temporary `/backups/` directory and verifies the generated `.manifest.json` SHA-256 hash.
+  4. Applies Migration 003 (`003_invitations.sql`).
+  5. Asserts `PRAGMA integrity_check` = `ok`.
+  6. Asserts `PRAGMA foreign_key_check` returns 0 rows.
+  7. Confirms 100% row preservation across all tables.
+  8. Cleans up temporary directory recursively in `after()`.
+- **Zero Live Database Access:** The live database file `/data/gateway.db` and live Kubernetes PVCs were neither opened, queried, nor modified at any point.
+
