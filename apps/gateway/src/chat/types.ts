@@ -25,6 +25,7 @@ export interface ModelToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
+  thoughtSignature?: string;
 }
 
 /**

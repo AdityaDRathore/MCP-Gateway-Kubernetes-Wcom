@@ -93,12 +93,17 @@ export class GeminiProviderAdapter implements ModelProvider {
         }
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           for (const tc of msg.toolCalls) {
-            parts.push({
+            const part: Record<string, unknown> = {
               functionCall: {
                 name: tc.name,
                 args: tc.args ?? {},
+                ...(tc.id ? { id: tc.id } : {}),
               },
-            });
+            };
+            if (tc.thoughtSignature) {
+              part.thoughtSignature = tc.thoughtSignature;
+            }
+            parts.push(part);
           }
         }
         if (parts.length > 0) {
@@ -116,19 +121,37 @@ export class GeminiProviderAdapter implements ModelProvider {
           responsePayload = { output: msg.content ?? '' };
         }
 
+        const structResponse =
+          typeof responsePayload === 'object' && responsePayload !== null && !Array.isArray(responsePayload)
+            ? (responsePayload as Record<string, unknown>)
+            : { result: responsePayload };
+
         contents.push({
-          role: 'function',
+          role: 'user',
           parts: [
             {
               functionResponse: {
                 name: toolName,
-                response: typeof responsePayload === 'object' && responsePayload !== null ? responsePayload : { output: responsePayload },
+                response: structResponse,
               },
             },
           ],
         });
       }
     }
+
+function sanitizeSchemaForGemini(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeSchemaForGemini);
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(schema as Record<string, unknown>)) {
+    if (['$schema', 'additionalProperties', 'exclusiveMinimum', 'exclusiveMaximum', '_meta'].includes(key)) {
+      continue;
+    }
+    cleaned[key] = sanitizeSchemaForGemini(val);
+  }
+  return cleaned;
+}
 
     // 2. Format tool declarations if available
     const geminiTools: Array<{ functionDeclarations: Array<Record<string, unknown>> }> = [];
@@ -137,7 +160,7 @@ export class GeminiProviderAdapter implements ModelProvider {
         functionDeclarations: tools.map((t) => ({
           name: t.name,
           description: t.description,
-          parameters: t.parameters,
+          parameters: sanitizeSchemaForGemini(t.parameters) as Record<string, unknown>,
         })),
       });
     }
@@ -263,9 +286,10 @@ export class GeminiProviderAdapter implements ModelProvider {
       }
       if (part.functionCall) {
         toolCalls.push({
-          id: crypto.randomUUID(),
+          id: part.functionCall.id || crypto.randomUUID(),
           name: part.functionCall.name,
           args: (part.functionCall.args as Record<string, unknown>) ?? {},
+          thoughtSignature: part.thoughtSignature,
         });
       }
     }

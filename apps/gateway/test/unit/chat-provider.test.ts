@@ -127,7 +127,7 @@ describe('Gateway Chat Provider Adapter Unit Tests (Gate P6-G2)', () => {
       assert.equal(capturedBody.contents[1].role, 'model');
       assert.equal(capturedBody.contents[1].parts[0].text, 'I will call a tool');
       assert.equal(capturedBody.contents[1].parts[1].functionCall.name, 'woocommerce__list_products');
-      assert.equal(capturedBody.contents[2].role, 'function');
+      assert.equal(capturedBody.contents[2].role, 'user');
       assert.equal(capturedBody.contents[2].parts[0].functionResponse.name, 'woocommerce__list_products');
 
       // Verify tools formatting
