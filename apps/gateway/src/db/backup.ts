@@ -483,6 +483,27 @@ export function restoreDatabase(options: RestoreOptions): RestoreResult {
     snapshotDb?.close();
   }
 
+  // 5b. Verify target connection state: Fail closed if target currently has an active connection holding a lock
+  if (fs.existsSync(safeTarget)) {
+    let lockCheckDb: DatabaseSync | null = null;
+    try {
+      lockCheckDb = new DatabaseSync(safeTarget);
+      lockCheckDb.exec('PRAGMA busy_timeout = 100;');
+      lockCheckDb.exec('BEGIN EXCLUSIVE;');
+      lockCheckDb.exec('ROLLBACK;');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/database is locked|busy/i.test(msg)) {
+        throw new RestoreError(
+          `Precondition failed: cannot restore while target database has an active connection or lock: ${msg}`
+        );
+      }
+      // If the target is physically corrupted or unreadable (disaster scenario), lock check is bypassed
+    } finally {
+      lockCheckDb?.close();
+    }
+  }
+
   // 6. Safe target cleanup: remove existing main DB and stale WAL/SHM companion files
   const targetDir = path.dirname(safeTarget);
   if (!fs.existsSync(targetDir)) {
