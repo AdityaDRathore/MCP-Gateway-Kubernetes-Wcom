@@ -26,6 +26,11 @@ import { CatalogService } from './upstream/catalog-service.js';
 import { ToolRouter } from './upstream/tool-router.js';
 import { AuthenticatedUser } from './auth/authenticator.js';
 import { AdminService } from './admin/admin-service.js';
+import { InvitationService } from './auth/invitation-service.js';
+import { InvitationRepository } from './db/invitation-repo.js';
+import { ApiKeyService } from './auth/api-key-service.js';
+import { ApiKeyRepository } from './db/api-key-repo.js';
+import { DatabaseManager } from './db/connection.js';
 
 // Polyfill global crypto for SDK Streamable HTTP transport streamId generation
 if (typeof (globalThis as any).crypto === 'undefined') {
@@ -346,6 +351,11 @@ export interface BrowserServerOptions {
   adminService?: AdminService;
   catalogService?: CatalogService;
   readinessCheck?: () => boolean;
+  invitationService?: InvitationService;
+  invitationRepo?: InvitationRepository;
+  apiKeyService?: ApiKeyService;
+  apiKeyRepo?: ApiKeyRepository;
+  dbManager?: DatabaseManager;
 }
 
 /**
@@ -384,6 +394,11 @@ export function createBrowserApp(options: BrowserServerOptions): express.Applica
     trustedProxies: trustedProxiesList,
     adminService: options.adminService,
     catalogService: options.catalogService,
+    invitationService: options.invitationService,
+    invitationRepo: options.invitationRepo,
+    apiKeyService: options.apiKeyService,
+    apiKeyRepo: options.apiKeyRepo,
+    dbManager: options.dbManager,
   });
 
   // Mount browser API at /api/v1/browser with origin enforcement and json parsing

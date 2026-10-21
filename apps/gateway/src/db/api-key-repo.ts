@@ -24,11 +24,24 @@ export interface ApiKeyWithUser {
   user_id: string;
   username: string;
   role: 'admin' | 'member';
+  is_active: number;
   key_hash: string;
   key_prefix: string;
   name: string;
   expires_at: number | null;
   revoked_at: number | null;
+  last_used_at: number | null;
+}
+
+export interface ApiKeyWithUserSummary {
+  id: string;
+  user_id: string;
+  username: string;
+  name: string;
+  key_prefix: string;
+  expires_at: number | null;
+  revoked_at: number | null;
+  created_at: number;
   last_used_at: number | null;
 }
 
@@ -89,6 +102,7 @@ export class ApiKeyRepository {
         k.user_id,
         u.username,
         u.role,
+        COALESCE(u.is_active, 1) as is_active,
         k.key_hash,
         k.key_prefix,
         k.name,
@@ -123,6 +137,16 @@ export class ApiKeyRepository {
     return Number(result.changes) > 0;
   }
 
+  revokeAllUserApiKeys(userId: string, revokedAt: number = Math.floor(Date.now() / 1000)): number {
+    const stmt = this.db.prepare(`
+      UPDATE api_keys 
+      SET revoked_at = ? 
+      WHERE user_id = ? AND revoked_at IS NULL;
+    `);
+    const result = stmt.run(revokedAt, userId);
+    return Number(result.changes);
+  }
+
   updateApiKeyLastUsed(id: string, lastUsedAt: number = Math.floor(Date.now() / 1000)): void {
     const stmt = this.db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?;');
     stmt.run(lastUsedAt, id);
@@ -136,5 +160,44 @@ export class ApiKeyRepository {
       ORDER BY created_at DESC;
     `);
     return stmt.all(userId) as unknown as ApiKeyRecord[];
+  }
+
+  listAllApiKeysWithUser(): ApiKeyWithUserSummary[] {
+    const stmt = this.db.prepare(`
+      SELECT 
+        k.id,
+        k.user_id,
+        u.username,
+        k.name,
+        k.key_prefix,
+        k.expires_at,
+        k.revoked_at,
+        k.created_at,
+        k.last_used_at
+      FROM api_keys k
+      JOIN users u ON k.user_id = u.id
+      ORDER BY k.created_at DESC;
+    `);
+    return stmt.all() as unknown as ApiKeyWithUserSummary[];
+  }
+
+  listApiKeysByUserWithUser(userId: string): ApiKeyWithUserSummary[] {
+    const stmt = this.db.prepare(`
+      SELECT 
+        k.id,
+        k.user_id,
+        u.username,
+        k.name,
+        k.key_prefix,
+        k.expires_at,
+        k.revoked_at,
+        k.created_at,
+        k.last_used_at
+      FROM api_keys k
+      JOIN users u ON k.user_id = u.id
+      WHERE k.user_id = ?
+      ORDER BY k.created_at DESC;
+    `);
+    return stmt.all(userId) as unknown as ApiKeyWithUserSummary[];
   }
 }

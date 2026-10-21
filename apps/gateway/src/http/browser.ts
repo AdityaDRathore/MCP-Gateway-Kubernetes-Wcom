@@ -20,10 +20,40 @@ import {
 } from '../admin/admin-types.js';
 import { CatalogService } from '../upstream/catalog-service.js';
 import { logger } from '../logging/logger.js';
+import { InvitationService, InvitationError } from '../auth/invitation-service.js';
+import { InvitationRepository } from '../db/invitation-repo.js';
+import { ApiKeyService } from '../auth/api-key-service.js';
+import { ApiKeyRepository, ApiKeyWithUserSummary } from '../db/api-key-repo.js';
+import { DatabaseManager } from '../db/connection.js';
+import { DatabaseSync } from 'node:sqlite';
 
 const LoginRequestSchema = z.object({
   username: z.string().min(1, 'Username is required'),
   password: z.string().min(1, 'Password is required'),
+});
+
+const CreateInvitationSchema = z.object({
+  role: z.enum(['admin', 'member']).optional().default('member'),
+});
+
+const RedeemInvitationSchema = z.object({
+  token: z.string().min(1, 'Token is required'),
+  username: z
+    .string()
+    .min(3, 'Username must be at least 3 characters')
+    .max(32, 'Username must be at most 32 characters')
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Username must be alphanumeric, hyphen, or underscore'),
+  password: z.string().min(10, 'Password must be at least 10 characters long'),
+});
+
+const UpdateMemberRoleSchema = z.object({
+  role: z.enum(['admin', 'member']),
+});
+
+const CreateKeySchema = z.object({
+  name: z.string().min(1, 'Key name is required').max(64, 'Key name must be at most 64 characters'),
+  expiresInDays: z.number().int().positive().max(365).optional(),
+  userId: z.string().optional(),
 });
 
 const DUMMY_SCRYPT_HASH =
@@ -83,6 +113,11 @@ export interface BrowserRouterOptions {
   rateLimiter?: LoginRateLimiter;
   adminService?: AdminService;
   catalogService?: CatalogService;
+  invitationService?: InvitationService;
+  invitationRepo?: InvitationRepository;
+  apiKeyService?: ApiKeyService;
+  apiKeyRepo?: ApiKeyRepository;
+  dbManager?: DatabaseManager;
 }
 
 export function createBrowserRouter(options: BrowserRouterOptions): Router {
@@ -500,6 +535,477 @@ export function createBrowserRouter(options: BrowserRouterOptions): Router {
       res.status(200).json(result);
     } catch (err: unknown) {
       handleAdminError(err, res);
+    }
+  });
+
+  const runWriteTx = <T>(fn: () => T): T => {
+    if (options.dbManager) {
+      return options.dbManager.transaction(fn);
+    }
+    const db = (options.userRepo as any).db as DatabaseSync;
+    db.exec('BEGIN IMMEDIATE TRANSACTION;');
+    try {
+      const res = fn();
+      db.exec('COMMIT;');
+      return res;
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK;');
+      } catch {}
+      throw err;
+    }
+  };
+
+  /**
+   * 10. POST /api/v1/browser/invitations
+   * Creates a single-use invitation token for a new team member.
+   * Allowed: Admin only. Requires CSRF.
+   */
+  router.post('/invitations', sessionAuth, requireRole('admin'), csrfAuth, async (req: BrowserRequest, res: Response): Promise<void> => {
+    if (!options.invitationService) {
+      res.status(501).json({ error: 'Invitation service not configured', code: 'NOT_IMPLEMENTED' });
+      return;
+    }
+    const parseResult = CreateInvitationSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      res.status(400).json({ error: 'Validation Error', details: parseResult.error.format() });
+      return;
+    }
+    const currentUser = req.sessionContext!.user;
+    try {
+      const result = options.invitationService.createInvitation({
+        role: parseResult.data.role,
+        invitedBy: currentUser.id,
+      });
+      res.status(201).json({
+        invitation: {
+          id: result.id,
+          role: result.role,
+          expiresAt: result.expiresAt,
+          inviteUrl: result.inviteUrl,
+          token: result.rawToken,
+        },
+      });
+    } catch (err: unknown) {
+      if (err instanceof InvitationError) {
+        res.status(err.statusCode).json({ error: err.message, code: err.code });
+        return;
+      }
+      logger.error('Failed to create invitation', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 11. POST /api/v1/browser/invitations/redeem
+   * Redeems an invitation token, creating user and credentials.
+   * Allowed: Public (Anonymous).
+   */
+  router.post('/invitations/redeem', async (req: Request, res: Response): Promise<void> => {
+    if (!options.invitationService) {
+      res.status(501).json({ error: 'Invitation service not configured', code: 'NOT_IMPLEMENTED' });
+      return;
+    }
+    const parseResult = RedeemInvitationSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      res.status(400).json({ error: 'Validation Error', details: parseResult.error.format() });
+      return;
+    }
+    const { token, username, password } = parseResult.data;
+    const clientIp = getClientIp(req, trustedProxies);
+    const userAgent = req.headers['user-agent'] as string | undefined;
+
+    try {
+      const result = await options.invitationService.redeemInvitation({
+        token,
+        username,
+        password,
+        meta: { ipAddress: clientIp, userAgent },
+      });
+
+      const cookieHeader = SessionService.buildCookieHeader(result.session.rawToken, {
+        secure: options.cookieSecure,
+      });
+      res.setHeader('Set-Cookie', cookieHeader);
+
+      res.status(200).json({
+        user: {
+          id: result.user.id,
+          username: result.user.username,
+          role: result.user.role,
+        },
+        csrfToken: result.session.csrfToken,
+      });
+    } catch (err: unknown) {
+      if (err instanceof InvitationError) {
+        res.status(err.statusCode).json({ error: err.message, code: err.code });
+        return;
+      }
+      logger.error('Failed to redeem invitation', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 12. GET /api/v1/browser/members
+   * Returns list of team members with their active key counts.
+   * Allowed: Admin only.
+   */
+  router.get('/members', sessionAuth, requireRole('admin'), async (_req: BrowserRequest, res: Response): Promise<void> => {
+    try {
+      const users = options.userRepo.listUsersWithKeyCounts();
+      res.status(200).json({
+        members: users.map((u) => ({
+          id: u.id,
+          username: u.username,
+          role: u.role,
+          isActive: u.is_active === 1,
+          createdAt: u.created_at,
+          activeKeyCount: u.active_key_count,
+        })),
+      });
+    } catch (err: unknown) {
+      logger.error('Failed to list members', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 13. POST /api/v1/browser/members/:id/deactivate
+   * Deactivates a team member, revoking all API keys and terminating sessions.
+   * Allowed: Admin only. Requires CSRF.
+   */
+  router.post('/members/:id/deactivate', sessionAuth, requireRole('admin'), csrfAuth, async (req: BrowserRequest, res: Response): Promise<void> => {
+    const targetId = req.params.id;
+    const currentAdmin = req.sessionContext!.user;
+
+    if (targetId === currentAdmin.id) {
+      res.status(400).json({
+        error: 'Cannot deactivate your own account',
+        code: 'SELF_DEACTIVATION_PROHIBITED',
+      });
+      return;
+    }
+
+    const targetUser = options.userRepo.findUserById(targetId);
+    if (!targetUser) {
+      res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+      return;
+    }
+
+    if (targetUser.is_active === 0) {
+      res.status(400).json({ error: 'User is already deactivated', code: 'USER_ALREADY_DEACTIVATED' });
+      return;
+    }
+
+    try {
+      runWriteTx(() => {
+        if (targetUser.role === 'admin') {
+          const activeAdmins = options.userRepo.countActiveAdmins();
+          if (activeAdmins <= 1) {
+            throw new Error('LAST_ACTIVE_ADMIN');
+          }
+        }
+        options.userRepo.updateActiveStatus(targetId, 0);
+        if (options.apiKeyRepo) {
+          options.apiKeyRepo.revokeAllUserApiKeys(targetId);
+        }
+        options.sessionService.invalidateUserSessions(targetId);
+      });
+
+      logger.info('Member deactivated', {
+        adminId: currentAdmin.id,
+        targetUserId: targetId,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Member deactivated successfully',
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message === 'LAST_ACTIVE_ADMIN') {
+        res.status(400).json({
+          error: 'Cannot deactivate the last active administrator',
+          code: 'LAST_ADMIN_PROTECTED',
+        });
+        return;
+      }
+      logger.error('Failed to deactivate member', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 14. POST /api/v1/browser/members/:id/reactivate
+   * Reactivates a deactivated team member.
+   * Allowed: Admin only. Requires CSRF.
+   */
+  router.post('/members/:id/reactivate', sessionAuth, requireRole('admin'), csrfAuth, async (req: BrowserRequest, res: Response): Promise<void> => {
+    const targetId = req.params.id;
+    const targetUser = options.userRepo.findUserById(targetId);
+    if (!targetUser) {
+      res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+      return;
+    }
+
+    if (targetUser.is_active === 1) {
+      res.status(400).json({ error: 'User is already active', code: 'USER_ALREADY_ACTIVE' });
+      return;
+    }
+
+    try {
+      options.userRepo.updateActiveStatus(targetId, 1);
+      logger.info('Member reactivated', {
+        adminId: req.sessionContext!.user.id,
+        targetUserId: targetId,
+      });
+      res.status(200).json({
+        success: true,
+        message: 'Member reactivated successfully',
+      });
+    } catch (err: unknown) {
+      logger.error('Failed to reactivate member', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 15. PATCH /api/v1/browser/members/:id/role
+   * Updates a member's role (admin <-> member).
+   * Allowed: Admin only. Requires CSRF.
+   */
+  router.patch('/members/:id/role', sessionAuth, requireRole('admin'), csrfAuth, async (req: BrowserRequest, res: Response): Promise<void> => {
+    const targetId = req.params.id;
+    const parseResult = UpdateMemberRoleSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      res.status(400).json({ error: 'Validation Error', details: parseResult.error.format() });
+      return;
+    }
+
+    const targetUser = options.userRepo.findUserById(targetId);
+    if (!targetUser) {
+      res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+      return;
+    }
+
+    const newRole = parseResult.data.role;
+    if (targetUser.role === newRole) {
+      res.status(200).json({
+        success: true,
+        user: { id: targetUser.id, username: targetUser.username, role: targetUser.role },
+      });
+      return;
+    }
+
+    try {
+      runWriteTx(() => {
+        if (targetUser.role === 'admin' && newRole === 'member' && targetUser.is_active === 1) {
+          const activeAdmins = options.userRepo.countActiveAdmins();
+          if (activeAdmins <= 1) {
+            throw new Error('LAST_ACTIVE_ADMIN');
+          }
+        }
+        options.userRepo.updateUserRole(targetId, newRole);
+        // Invalidate active browser sessions to force re-authentication with new privileges
+        options.sessionService.invalidateUserSessions(targetId);
+      });
+
+      logger.info('Member role updated', {
+        adminId: req.sessionContext!.user.id,
+        targetUserId: targetId,
+        oldRole: targetUser.role,
+        newRole,
+      });
+
+      res.status(200).json({
+        success: true,
+        user: { id: targetUser.id, username: targetUser.username, role: newRole },
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message === 'LAST_ACTIVE_ADMIN') {
+        res.status(400).json({
+          error: 'Cannot demote the last active administrator',
+          code: 'LAST_ADMIN_PROTECTED',
+        });
+        return;
+      }
+      logger.error('Failed to update member role', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 16. GET /api/v1/browser/keys
+   * Lists API keys with strict IDOR protection.
+   * Admins can list all keys or filter by userId.
+   * Members can strictly ONLY list their own keys (any userId query param is ignored).
+   */
+  router.get('/keys', sessionAuth, async (req: BrowserRequest, res: Response): Promise<void> => {
+    if (!options.apiKeyRepo) {
+      res.status(501).json({ error: 'API key repository not configured', code: 'NOT_IMPLEMENTED' });
+      return;
+    }
+
+    const currentUser = req.sessionContext!.user;
+    try {
+      let keys: ApiKeyWithUserSummary[];
+      if (currentUser.role === 'admin') {
+        const filterUserId = typeof req.query.userId === 'string' ? req.query.userId : undefined;
+        if (filterUserId) {
+          keys = options.apiKeyRepo.listApiKeysByUserWithUser(filterUserId);
+        } else {
+          keys = options.apiKeyRepo.listAllApiKeysWithUser();
+        }
+      } else {
+        // Enforce member IDOR boundary: query strictly by logged-in user id
+        keys = options.apiKeyRepo.listApiKeysByUserWithUser(currentUser.id);
+      }
+
+      res.status(200).json({
+        keys: keys.map((k) => ({
+          id: k.id,
+          userId: k.user_id,
+          username: k.username,
+          name: k.name,
+          keyPrefix: k.key_prefix,
+          expiresAt: k.expires_at,
+          revokedAt: k.revoked_at,
+          createdAt: k.created_at,
+          lastUsedAt: k.last_used_at,
+        })),
+      });
+    } catch (err: unknown) {
+      logger.error('Failed to list API keys', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 17. POST /api/v1/browser/keys
+   * Creates a new API key.
+   * Admins can create keys for any active user.
+   * Members can strictly only create keys for themselves.
+   * Raw key is returned once in transient response.
+   */
+  router.post('/keys', sessionAuth, csrfAuth, async (req: BrowserRequest, res: Response): Promise<void> => {
+    if (!options.apiKeyService || !options.apiKeyRepo) {
+      res.status(501).json({ error: 'API key service not configured', code: 'NOT_IMPLEMENTED' });
+      return;
+    }
+
+    const parseResult = CreateKeySchema.safeParse(req.body);
+    if (!parseResult.success) {
+      res.status(400).json({ error: 'Validation Error', details: parseResult.error.format() });
+      return;
+    }
+
+    const currentUser = req.sessionContext!.user;
+    let targetUserId = currentUser.id;
+
+    if (currentUser.role === 'admin') {
+      if (parseResult.data.userId) {
+        targetUserId = parseResult.data.userId;
+        const targetUser = options.userRepo.findUserById(targetUserId);
+        if (!targetUser) {
+          res.status(404).json({ error: 'Target user not found', code: 'USER_NOT_FOUND' });
+          return;
+        }
+        if (targetUser.is_active !== 1) {
+          res.status(400).json({ error: 'Cannot create API key for deactivated user', code: 'USER_DEACTIVATED' });
+          return;
+        }
+      }
+    } else {
+      // Member is forced to self-provisioning; cannot set userId for another user
+      targetUserId = currentUser.id;
+    }
+
+    const targetUser = options.userRepo.findUserById(targetUserId);
+    if (!targetUser || targetUser.is_active !== 1) {
+      res.status(400).json({ error: 'Cannot create API key for inactive user', code: 'USER_DEACTIVATED' });
+      return;
+    }
+
+    const expiresInSeconds = parseResult.data.expiresInDays
+      ? parseResult.data.expiresInDays * 86400
+      : undefined;
+
+    try {
+      const { apiKey, rawKey } = options.apiKeyService.generateApiKey({
+        userId: targetUserId,
+        name: parseResult.data.name,
+        expiresInSeconds,
+      });
+
+      logger.info('API key created via browser self-service', {
+        creatorId: currentUser.id,
+        targetUserId,
+        keyId: apiKey.id,
+        keyPrefix: apiKey.key_prefix,
+      });
+
+      res.status(201).json({
+        apiKey: {
+          id: apiKey.id,
+          userId: apiKey.user_id,
+          username: targetUser.username,
+          name: apiKey.name,
+          keyPrefix: apiKey.key_prefix,
+          expiresAt: apiKey.expires_at,
+          createdAt: apiKey.created_at,
+        },
+        rawKey,
+      });
+    } catch (err: unknown) {
+      logger.error('Failed to create API key', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /**
+   * 18. POST /api/v1/browser/keys/:id/revoke
+   * Revokes an API key.
+   * Admins can revoke any key.
+   * Members can ONLY revoke their own keys (IDOR protected).
+   */
+  router.post('/keys/:id/revoke', sessionAuth, csrfAuth, async (req: BrowserRequest, res: Response): Promise<void> => {
+    if (!options.apiKeyRepo) {
+      res.status(501).json({ error: 'API key repository not configured', code: 'NOT_IMPLEMENTED' });
+      return;
+    }
+
+    const keyId = req.params.id;
+    const currentUser = req.sessionContext!.user;
+
+    const key = options.apiKeyRepo.findApiKeyById(keyId);
+    if (!key) {
+      res.status(404).json({ error: 'API key not found', code: 'KEY_NOT_FOUND' });
+      return;
+    }
+
+    // Enforce ownership: members can only revoke their own keys
+    if (currentUser.role !== 'admin' && key.user_id !== currentUser.id) {
+      res.status(403).json({
+        error: 'You do not have permission to revoke this API key',
+        code: 'FORBIDDEN',
+      });
+      return;
+    }
+
+    try {
+      options.apiKeyRepo.revokeApiKey(keyId);
+      logger.info('API key revoked via browser self-service', {
+        operatorId: currentUser.id,
+        keyId,
+        ownerId: key.user_id,
+      });
+      res.status(200).json({
+        success: true,
+        message: 'API key revoked successfully',
+      });
+    } catch (err: unknown) {
+      logger.error('Failed to revoke API key', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
     }
   });
 

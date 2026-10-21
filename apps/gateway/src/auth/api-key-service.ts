@@ -97,6 +97,11 @@ export class ApiKeyService {
       return null;
     }
 
+    // Active user check: fail closed immediately if user is deactivated or missing active status
+    if (typeof record.is_active !== 'number' || record.is_active !== 1) {
+      return null;
+    }
+
     // Expiry check: fail if expired
     const now = Math.floor(Date.now() / 1000);
     if (record.expires_at !== null && record.expires_at <= now) {

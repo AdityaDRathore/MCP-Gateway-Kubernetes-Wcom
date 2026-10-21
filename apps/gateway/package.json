@@ -14,7 +14,8 @@
     "test": "npm run test:unit && npm run test:protocol",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "bootstrap": "tsx src/cli/bootstrap.ts"
+    "bootstrap": "tsx src/cli/bootstrap.ts",
+    "bootstrap:admin": "tsx src/cli/bootstrap-admin.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

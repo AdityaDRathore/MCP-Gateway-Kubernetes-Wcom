@@ -15,6 +15,8 @@ import { DatabaseManager } from './db/connection.js';
 import { ApiKeyRepository } from './db/api-key-repo.js';
 import { ApiKeyService } from './auth/api-key-service.js';
 import { DatabaseAuthenticator } from './auth/database-authenticator.js';
+import { InvitationRepository } from './db/invitation-repo.js';
+import { InvitationService } from './auth/invitation-service.js';
 
 // Initialize SQLite database and run pending migrations
 const dbManager = new DatabaseManager({
@@ -104,6 +106,14 @@ const userRepo = new UserRepository(dbManager.getDb());
 const sessionRepo = new SessionRepository(dbManager.getDb());
 const passwordService = new ScryptPasswordService();
 const sessionService = new SessionService(sessionRepo, userRepo);
+const invitationRepo = new InvitationRepository(dbManager.getDb());
+const invitationService = new InvitationService(
+  invitationRepo,
+  userRepo,
+  sessionService,
+  passwordService,
+  dbManager
+);
 
 const app = createExpressApp({
   config,
@@ -121,6 +131,11 @@ const browserApp = createBrowserApp({
   passwordService,
   adminService,
   catalogService,
+  invitationService,
+  invitationRepo,
+  apiKeyService,
+  apiKeyRepo,
+  dbManager,
   readinessCheck: () => dbManager.isHealthy(),
 });
 

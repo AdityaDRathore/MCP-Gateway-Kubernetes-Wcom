@@ -98,6 +98,25 @@ export class UserRepository {
     stmt.run(isActive, userId);
   }
 
+  updateUserRole(userId: string, role: 'admin' | 'member'): void {
+    const stmt = this.db.prepare(`
+      UPDATE users
+      SET role = ?
+      WHERE id = ?;
+    `);
+    stmt.run(role, userId);
+  }
+
+  countActiveAdmins(): number {
+    const stmt = this.db.prepare(`
+      SELECT count(*) as count
+      FROM users
+      WHERE role = 'admin' AND is_active = 1;
+    `);
+    const row = stmt.get() as { count: number } | undefined;
+    return row?.count ?? 0;
+  }
+
   listUsers(): UserEntity[] {
     const stmt = this.db.prepare(`
       SELECT id, username, role, is_active, created_at
@@ -106,4 +125,31 @@ export class UserRepository {
     `);
     return stmt.all() as unknown as UserEntity[];
   }
+
+  listUsersWithKeyCounts(now: number = Math.floor(Date.now() / 1000)): MemberWithKeyCount[] {
+    const stmt = this.db.prepare(`
+      SELECT 
+        u.id, 
+        u.username, 
+        u.role, 
+        u.is_active, 
+        u.created_at,
+        COUNT(k.id) as active_key_count
+      FROM users u
+      LEFT JOIN api_keys k ON u.id = k.user_id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > ?)
+      GROUP BY u.id, u.username, u.role, u.is_active, u.created_at
+      ORDER BY u.created_at ASC;
+    `);
+    const rows = stmt.all(now) as unknown as MemberWithKeyCount[];
+    return rows;
+  }
+}
+
+export interface MemberWithKeyCount {
+  id: string;
+  username: string;
+  role: 'admin' | 'member';
+  is_active: number;
+  created_at: number;
+  active_key_count: number;
 }
