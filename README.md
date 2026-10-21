@@ -121,7 +121,8 @@ For full system architecture, network boundaries, and resource budgeting, see [`
 │   ├── phase 1/
 │   ├── phase 2/
 │   ├── phase 3/
-│   └── phase 4/              # Phase 4 Study Material & Technical Context Reference
+│   ├── phase 4/              # Phase 4 Study Material & Technical Context Reference
+│   └── phase 5/              # Phase 5 Study Material & Technical Context Reference
 ├── package.json              # npm workspaces root
 └── tsconfig.base.json        # Base TypeScript compiler configuration
 ```
@@ -394,6 +395,19 @@ kubectl -n urumi exec deployment/urumi-wordpress -- wp post list \
 - [**ADR-018**](docs/decisions/ADR-018-upstream-mock-contracts-crm-and-tasks.md): Upstream Mock Services Architecture: Synthetic CRM and In-Memory Tasks Contracts
 - [**ADR-019**](docs/decisions/ADR-019-browser-identity-session-and-csrf.md): Browser Identity, Scrypt Password KDF, Opaque Session Tokens, and Dual-Layer CSRF Protection
 - [**ADR-020**](docs/decisions/ADR-020-dual-listener-and-ingress-perimeter.md): Dual-Listener Architecture and Public Ingress Perimeter Isolation
+
+---
+
+## Project Study & Technical Context Manuals
+
+For deep-dive self-study, interview preparation, and end-to-end technical breakdowns, refer to the curated documentation manuals:
+
+- **Phase 5 (Management Platform, Browser Identity, Dual-Listener & Quality Gates 0–7)**:
+  - [**Phase 5 Project Study Material**](documentation/phase%205/Project%20Study%20Material.md): Deep-dive educational textbook explaining simply and thoroughly every technology, Scrypt mathematics, session management, CSRF defense, dual listeners, gotchas, and 15 interview preparation Q&As.
+  - [**Phase 5 Technical Context Material**](documentation/phase%205/Technical%20Context%20Material.md): Concrete technical reference detailing monorepo inventory, 8-table SQLite schema, REST API contracts, Kubernetes workload manifests, and reproduction guide.
+- **Phase 4 (Team MCP Gateway Core, Dynamic Tool Catalog & Resilience)**:
+  - [**Phase 4 Project Study Material**](documentation/phase%204/Project%20Study%20Material.md): In-depth conceptual guide covering MCP Streamable HTTP, WAL persistence, constant-time crypto, and upstream microservices.
+  - [**Phase 4 Technical Context Material**](documentation/phase%204/Technical%20Context%20Material.md): Concrete technical breakdown and reproduction reference for Phase 4.
 
 ---
 

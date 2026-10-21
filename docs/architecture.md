@@ -194,4 +194,18 @@ flowchart TD
 - [**ADR-019**](decisions/ADR-019-browser-identity-session-and-csrf.md): Browser Identity, Scrypt Password KDF, Opaque Session Tokens, and Dual-Layer CSRF Protection
 - [**ADR-020**](decisions/ADR-020-dual-listener-and-ingress-perimeter.md): Dual-Listener Architecture and Public Ingress Perimeter Isolation
 
+---
+
+## 5. Comprehensive Study & Technical Context Manuals
+
+For deep-dive educational walkthroughs, conceptual textbooks, and complete system breakdown references, refer to the self-study documentation packages:
+
+- **Phase 5 Study & Technical Reference (Management Platform, Browser Identity, Dual-Listener & Quality Gates 0–7)**:
+  - [**Phase 5 Project Study Material**](../documentation/phase%205/Project%20Study%20Material.md): Deep-dive educational textbook explaining simply and thoroughly every technology, Scrypt mathematics, session management, CSRF defense, dual listeners, gotchas, and 15 interview preparation Q&As.
+  - [**Phase 5 Technical Context Material**](../documentation/phase%205/Technical%20Context%20Material.md): Concrete technical reference detailing monorepo inventory, 8-table SQLite schema, REST API contracts, Kubernetes workload manifests, and reproduction guide.
+- **Phase 4 Study & Technical Reference (Team MCP Gateway Core, Dynamic Tool Catalog & Resilience)**:
+  - [**Phase 4 Project Study Material**](../documentation/phase%204/Project%20Study%20Material.md): In-depth conceptual guide covering MCP Streamable HTTP, WAL persistence, constant-time crypto, and upstream microservices.
+  - [**Phase 4 Technical Context Material**](../documentation/phase%204/Technical%20Context%20Material.md): Concrete technical breakdown and reproduction reference for Phase 4.
+
+
 
