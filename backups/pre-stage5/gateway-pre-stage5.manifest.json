@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-10-21T12:39:30.440Z",
+  "sha256": "a9307df1231b0cf0446823214e52420c32c081ce7d7525aaa7e5df435377ff6f",
+  "sizeBytes": 208896,
+  "integrity": "ok",
+  "foreignKeyViolations": 0,
+  "counts": {
+    "users": 1,
+    "auditLogs": 451,
+    "upstreams": 3
+  }
+}

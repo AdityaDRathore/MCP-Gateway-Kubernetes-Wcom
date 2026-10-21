@@ -1,0 +1,85 @@
+USER-SUPPLIED VALUES:
+gateway:
+  domain: dashboard.127.0.0.1.nip.io
+  image: urumi-gateway:1.0.0
+  imagePullPolicy: IfNotPresent
+  k8sApiClusterIp: 10.43.0.1/32
+  k8sControlPlaneEndpoint: 172.19.0.2/32
+  persistence:
+    size: 500Mi
+    storageClass: local-path
+  port: 8080
+  replicas: 1
+  resources:
+    limits:
+      cpu: 200m
+      memory: 192Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+global:
+  environment: local
+ingress:
+  className: traefik
+  tls:
+    enabled: false
+networkPolicy:
+  allowTestClient: true
+  enabled: true
+store:
+  domain: shop.127.0.0.1.nip.io
+  mariadb:
+    persistence:
+      storageClass: local-path
+    resources:
+      limits:
+        cpu: 500m
+        memory: 384Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+  port: 8080
+  wordpress:
+    persistence:
+      storageClass: local-path
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+upstreams:
+  crm:
+    digest: ""
+    image: mcp-crm:1.0.0
+    imagePullPolicy: IfNotPresent
+    resources:
+      limits:
+        cpu: 150m
+        memory: 128Mi
+      requests:
+        cpu: 25m
+        memory: 48Mi
+  tasks:
+    digest: ""
+    image: mcp-tasks:1.0.0
+    imagePullPolicy: IfNotPresent
+    resources:
+      limits:
+        cpu: 150m
+        memory: 128Mi
+      requests:
+        cpu: 25m
+        memory: 48Mi
+  woocommerce:
+    digest: ""
+    image: urumi-woocommerce-mcp:1.0.0
+    imagePullPolicy: IfNotPresent
+    resources:
+      limits:
+        cpu: 150m
+        memory: 128Mi
+      requests:
+        cpu: 25m
+        memory: 48Mi
