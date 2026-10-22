@@ -228,10 +228,88 @@
 
 ---
 
+### Gate P7-G2: Controlled Deployment & Runtime Hardening Verification
+- **Execution Date**: October 22, 2026
+- **Worker**: Implementation Worker reporting to Technical Head
+- **Status**: **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
+- **Operational Scope**: Controlled Helm upgrade of release `urumi-store` to revision 11 on cluster `k3d-urumi`. Live runtime verification of WooCommerce MCP filesystem hardening (`readOnlyRootFilesystem: true` with `/tmp` `emptyDir` mount) and ServiceAccount token isolation (`automountServiceAccountToken: false`) on CRM and Tasks. Zero persistent data mutations; Gateway identity and protected storefront records 100% preserved.
+- **Starting Git Commit**: `81193bef317315129f37b145ae611e4cd980ffc5` (`81193be`)
+- **Ending Git Commit**: `81193bef317315129f37b145ae611e4cd980ffc5` (`81193be`)
+- **Deliverables**:
+  - Deployment & Runtime Verification Report: `docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md`
+  - Execution Log: `docs/phase-7/phase-7-execution-log.md`
+
+#### Actions & Commands Executed:
+
+1. **Preflight Baseline & Environment Inspection (Stage A):**
+   - Recorded repository state (branch `main`, HEAD commit `81193bef317315129f37b145ae611e4cd980ffc5`, clean tracked working tree).
+   - Recorded Kubernetes context (`k3d-urumi`, namespace `urumi`, release `urumi-store` at Revision 10).
+   - Captured pre-upgrade pod identities, UIDs, readiness, and restart counts across all 6 platform workloads.
+   - Verified all 3 PVCs (`gateway`, `mariadb`, `wordpress`) Bound on `local-path`.
+   - Validated Gateway SQLite database: `PRAGMA integrity_check` -> `ok`, 0 foreign-key violations, table row counts recorded (`schema_migrations: 3`, `upstreams: 3`, `users: 4`, `user_credentials: 4`, `api_keys: 27`, `user_invitations: 4`, `browser_sessions: 27`, `audit_logs: 483`).
+   - Validated protected storefront records with customer PII omitted: Product IDs 10, 11, 12 and Order #14 intact.
+   - Verified Gateway ServiceAccount (`urumi-gateway-sa`) and Secret-management RBAC in `urumi-gateway-secrets`.
+
+2. **Proposed Upgrade Verification & Rendered Diff Review (Stage B):**
+   ```bash
+   helm lint infra/helm/urumi-platform -f infra/helm/urumi-platform/values-local.yaml
+   helm lint infra/helm/urumi-platform -f infra/helm/urumi-platform/values-prod.yaml
+   helm upgrade urumi-store infra/helm/urumi-platform -n urumi --reuse-values --dry-run
+   ```
+   - Confirmed Helm lint passed with 0 errors across both local and production profiles.
+   - Compared deployed Revision 10 manifests (28 resources) against dry-run output using Python YAML document diffing.
+   - Confirmed exactly 3 resources modified: `urumi-woocommerce-mcp` (read-only rootfs + `/tmp` mount), `urumi-mcp-crm` (no SA token), `urumi-mcp-tasks` (no SA token). Zero changes to Gateway, WordPress, MariaDB, PVCs, Services, or Ingress.
+
+3. **Controlled Deployment Execution (Stage C):**
+   ```bash
+   helm upgrade urumi-store infra/helm/urumi-platform -n urumi --reuse-values
+   kubectl rollout status deployment/urumi-woocommerce-mcp -n urumi --timeout=90s
+   kubectl rollout status deployment/urumi-mcp-crm -n urumi --timeout=90s
+   kubectl rollout status deployment/urumi-mcp-tasks -n urumi --timeout=90s
+   ```
+   - Successfully upgraded release `urumi-store` to Revision 11.
+   - Monitored rollouts to completion; verified all three target deployments rolled over to new Pod UIDs.
+   - Confirmed non-target workloads (`urumi-gateway`, `urumi-mariadb-0`, `urumi-wordpress`) retained their original Pod UIDs and suffered zero restarts.
+
+4. **Runtime Security Verification (Stage D):**
+   - **WooCommerce MCP:**
+     - Pod UID transitioned: `ababb14d-4b5a-49d0-948c-a470b7d30cb4` -> `3502b258-3038-4db5-a8e9-553413c55348`.
+     - Verified `id`: `uid=10001(mcpuser) gid=10001(mcpuser)`.
+     - Verified capabilities: `CapEff: 0000000000000000` (all dropped), `Seccomp: 2` (RuntimeDefault).
+     - Verified mounts: `overlay / overlay ro` and `/dev/sda5 /tmp ext4 rw`.
+     - Kernel write probe: `touch /test-root` denied with `Read-only file system` (EROFS); `touch /app/test-app` denied with `Read-only file system` (EROFS).
+     - Ephemeral write probe: `touch /tmp/test-tmp && rm /tmp/test-tmp` succeeded.
+     - Read-only protocol smoke test: `list_products` executed cleanly over Streamable HTTP returning catalog without error.
+   - **CRM & Tasks Token Isolation:**
+     - CRM Pod UID transitioned: `2bce4429-afdd-49ac-9399-069c9a853c5e` -> `2cc485e1-7436-44c8-8133-c62bdfcd888c`.
+     - Tasks Pod UID transitioned: `576d50ea-bfd3-4764-b3c0-17c78546c8c4` -> `25e0981f-5a09-4a1c-b8c3-fa4f81d00e31`.
+     - Verified `automountServiceAccountToken: False` in PodSpecs; `kube-api-access-*` volume mount absent.
+     - In-container filesystem probe: `ls: /var/run/secrets/kubernetes.io/serviceaccount: No such file or directory` on both workloads.
+     - Tool discovery: CRM discovered 2 tools (`search_contacts`, `get_contact`); Tasks discovered 3 tools (`create_task`, `list_tasks`, `update_task_status`).
+   - **Gateway Unchanged:**
+     - Pod UID `eaa47adc-1744-4e9a-889c-26786e132e62` preserved with 0 restarts.
+     - ServiceAccount `urumi-gateway-sa`, token mount, and RBAC to `urumi-gateway-secrets` 100% preserved.
+
+5. **Post-Deployment Regression & Invariant Verification (Stage E):**
+   - Rechecked health probes across all 6 workloads: 6/6 returned HTTP 200 / exit code 0.
+   - Rechecked SQLite integrity: `PRAGMA integrity_check` -> `ok`, 0 foreign-key violations; row counts match preflight baseline exactly (`users: 4`, `api_keys: 27`, `audit_logs: 483`, etc.).
+   - Rechecked store invariants: Product IDs 10, 11, 12 and Order #14 retained baseline fields with zero drift.
+   - Rechecked PVC bindings: All 3 PVCs remain `Bound` on `local-path`.
+   - Executed hermetic workspace test suites under Node v24:
+     - `apps/woocommerce-mcp` unit tests: 17/17 passed (0 failures).
+     - `apps/woocommerce-mcp` protocol tests: 18/18 passed (0 failures).
+     - `apps/gateway` unit tests: 351/351 passed across 51 test suites (0 failures).
+     - `apps/gateway` security perimeter, API key lifecycle, and audit pagination tests: 26/26 passed.
+     - Typecheck on `gateway` and `woocommerce-mcp`: 0 errors.
+     - Dashboard production build: Vite compiled SPA bundle in 2.30s (`dist/` generated).
+
+---
+
 ## 2. Gate Summary & Stop Boundary
 
 - **Gate P7-G0 Status:** **COMPLETE**
-- **Gate P7-G1 Status:** **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
-- **Implementation Status:** **TARGETED HARDENING COMPLETED IN TEMPLATES ONLY; ZERO CLUSTER MUTATIONS**
-- **Next Gate:** P7-G2 (Targeted Live-Cluster Remediation Deployment) pending Technical Head approval.
-- **Formal Stop Notice:** **P7-G1 submitted for Technical Head review. P7-G2 and all live-cluster remediation or recovery testing remain unauthorized pending explicit approval.**
+- **Gate P7-G1 Status:** **COMPLETE**
+- **Gate P7-G2 Status:** **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
+- **Implementation Status:** **TARGETED HARDENING DEPLOYED AND EMPIRICALLY VERIFIED AT RUNTIME; ZERO DATA MUTATIONS**
+- **Next Gate:** P7-G3 (Controller-Managed Pod-Replacement Recovery Testing) pending Technical Head authorization.
+- **Formal Stop Notice:** **P7-G2 submitted for Technical Head review. P7-G3 pod-replacement recovery testing remains unauthorized pending explicit approval.**
