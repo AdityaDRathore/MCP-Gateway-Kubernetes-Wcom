@@ -305,11 +305,78 @@
 
 ---
 
+### Gate P7-G3: Gateway Pod-Replacement Recovery & Persistence Verification
+- **Execution Date**: October 22, 2026
+- **Worker**: Implementation Worker reporting to Technical Head
+- **Status**: **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
+- **Operational Scope**: Single graceful pod deletion of `urumi-gateway` with 30-second grace period on cluster `k3d-urumi`. Empirical verification of controller-managed pod replacement, PVC re-attachment, zero SQLite data loss across all 8 tables, full functional recovery (health probes, MCP discovery, tool execution, fail-closed auth), and store/workload invariant preservation.
+- **Starting Git Commit**: `d1b516d70892abed6e180ba0d217db19bb65a064` (`d1b516d`)
+- **Ending Git Commit**: `d1b516d70892abed6e180ba0d217db19bb65a064` (`d1b516d`)
+- **Deliverables**:
+  - Pod-Replacement Recovery Report: `docs/phase-7/p7-g3-pod-replacement-recovery-report.md`
+  - Execution Log: `docs/phase-7/phase-7-execution-log.md`
+
+#### Actions & Commands Executed:
+
+1. **Mandatory Preflight Baseline Capture (Stage A):**
+   - Verified Git repository clean at HEAD `d1b516d70892abed6e180ba0d217db19bb65a064`.
+   - Verified Kubernetes context `k3d-urumi`, namespace `urumi`, release `urumi-store` at Revision 11.
+   - Resolved active Gateway pod dynamically: `urumi-gateway-6d56bd4644-5gmxb` (UID: `eaa47adc-1744-4e9a-889c-26786e132e62`, Node: `k3d-urumi-server-0`, Image: `urumi-gateway:1.0.0`, Restarts: 1, Ready: True).
+   - Confirmed PVC binding: `urumi-gateway-pvc` Bound to volume `pvc-801dc6cb-076b-479a-8475-e77c905797f9`, mounted at `/data`.
+   - Captured pre-test SQLite state: `PRAGMA integrity_check` -> `ok`, `PRAGMA foreign_key_check` -> `[]`, row counts: `schema_migrations: 3`, `upstreams: 3`, `users: 4`, `user_credentials: 4`, `api_keys: 27`, `user_invitations: 4`, `browser_sessions: 27`, `audit_logs: 483`.
+   - Captured pre-test storefront baseline via WP-CLI: Products 10, 11, 12 and Order #14 intact.
+   - Verified Gateway ServiceAccount `urumi-gateway-sa` and RBAC binding to `urumi-gateway-secrets`.
+
+2. **Controlled Pod Deletion Execution (Stage B):**
+   ```bash
+   date -u +"%Y-%m-%dT%H:%M:%SZ" && \
+   kubectl delete pod urumi-gateway-6d56bd4644-5gmxb -n urumi --grace-period=30 && \
+   kubectl rollout status deployment/urumi-gateway -n urumi --timeout=90s && \
+   date -u +"%Y-%m-%dT%H:%M:%SZ"
+   ```
+   - Deletion initiated at `2026-10-22T17:57:31Z`.
+   - Pod `urumi-gateway-6d56bd4644-5gmxb` accepted for termination.
+   - Deployment controller created replacement pod `urumi-gateway-6d56bd4644-hzkvp` at `17:57:32Z`.
+   - Rollout completed and replacement pod reached `1/1 Ready` at `17:58:02Z` (31 seconds total).
+
+3. **Post-Replacement Recovery Verification (Stage C):**
+   - **Pod Identity (C1):** Replacement pod `urumi-gateway-6d56bd4644-hzkvp` verified with new UID `8bf5f90d-0f79-4d1f-97d7-55f80050f8f0`. Deployment maintained 1 desired replica; restart count reset to 0. `urumi-gateway-pvc` remained `Bound` and was mounted at `/data`.
+   - **SQLite Integrity & Row Counts (C2):** `PRAGMA integrity_check` returned `ok`; `PRAGMA foreign_key_check` returned 0 violations. All 8 table counts matched pre-test baseline with 100% precision:
+     - `schema_migrations`: 3
+     - `upstreams`: 3
+     - `users`: 4
+     - `user_credentials`: 4
+     - `api_keys`: 27
+     - `user_invitations`: 4
+     - `browser_sessions`: 27
+     - `audit_logs`: 483
+   - **Gateway Functional Recovery (C3):**
+     - Health probes (`/health/live`, `/health/ready`) returned HTTP 200.
+     - Upstream tool discovery verified: CRM (2 tools), Tasks (3 tools), WooCommerce (5 tools).
+     - Read-only tool execution (`list_products`) succeeded cleanly returning product catalog.
+     - Browser authentication perimeter verified: unauthenticated session returns 401; bad credentials returns generic 401 `INVALID_CREDENTIALS`.
+     - Bounded audit query returned latest 5 records with sub-millisecond execution.
+     - RBAC permissions verified: `urumi-gateway-sa` can `get`, `list`, and `create` secrets in `urumi-gateway-secrets`.
+   - **Storefront & Workload Invariants (C4):**
+     - Re-verified via WP-CLI: Products 10, 11, 12 and Order #14 retained baseline fields with zero drift.
+     - All 6 platform workloads healthy and Ready.
+     - P7-G2 container hardening (read-only rootfs on WooCommerce, token isolation on CRM and Tasks) confirmed active.
+
+4. **Hermetic Regression Test Verification (Node v24 LTS):**
+   - Typechecks: `gateway` (0 errors), `woocommerce-mcp` (0 errors).
+   - `apps/woocommerce-mcp` unit tests: 17/17 passed (0 failures).
+   - `apps/woocommerce-mcp` protocol tests: 18/18 passed (0 failures).
+   - `apps/gateway` unit tests: 351/351 passed across 51 test suites (0 failures).
+   - Operational probes across all 6 platform workloads: 6/6 passed.
+
+---
+
 ## 2. Gate Summary & Stop Boundary
 
 - **Gate P7-G0 Status:** **COMPLETE**
 - **Gate P7-G1 Status:** **COMPLETE**
-- **Gate P7-G2 Status:** **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
-- **Implementation Status:** **TARGETED HARDENING DEPLOYED AND EMPIRICALLY VERIFIED AT RUNTIME; ZERO DATA MUTATIONS**
-- **Next Gate:** P7-G3 (Controller-Managed Pod-Replacement Recovery Testing) pending Technical Head authorization.
-- **Formal Stop Notice:** **P7-G2 submitted for Technical Head review. P7-G3 pod-replacement recovery testing remains unauthorized pending explicit approval.**
+- **Gate P7-G2 Status:** **COMPLETE**
+- **Gate P7-G3 Status:** **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
+- **Implementation Status:** **CONTROLLER-MANAGED POD-REPLACEMENT RECOVERY & PERSISTENCE EMPIRICALLY VERIFIED; ZERO DATA DISCREPANCIES DETECTED**
+- **Next Gate:** P7-G4 (Egress Network Policy & Local Boundary Verification) pending Technical Head authorization.
+- **Formal Stop Notice:** **P7-G3 submitted for Technical Head review. P7-G4 and P7-G5 remain unauthorized pending explicit approval.**
