@@ -42,10 +42,13 @@ spec:
               protocol: TCP
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           env:
             - name: NODE_ENV
               value: {{ if .Values.upstreams.woocommerce.env }}{{ .Values.upstreams.woocommerce.env.NODE_ENV | default "production" | quote }}{{ else }}"production"{{ end }}
@@ -99,4 +102,7 @@ spec:
           resources:
             {{- toYaml .Values.upstreams.woocommerce.resources | nindent 12 }}
           {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
 {{- end }}
