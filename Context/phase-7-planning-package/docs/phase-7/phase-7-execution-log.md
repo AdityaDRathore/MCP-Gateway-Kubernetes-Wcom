@@ -371,12 +371,64 @@
 
 ---
 
+### Gate P7-G4: NetworkPolicy Boundary Verification
+- **Execution Date**: October 24, 2026
+- **Worker**: Implementation Worker reporting to Technical Head
+- **Status**: **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
+- **Operational Scope**: Read-only observation and bounded probe verification of Kubernetes NetworkPolicy communication boundaries across all 6 platform workloads in namespace `urumi` on cluster `k3d-urumi`. Zero modifications to policies, services, deployments, credentials, or applications.
+- **Starting Git Commit**: `a353cddfb9981c623f015130b692214ed499d01e` (`a353cdd`)
+- **Ending Git Commit**: `a353cddfb9981c623f015130b692214ed499d01e` (`a353cdd`)
+- **Deliverables**:
+  - NetworkPolicy Boundary Verification Report: `docs/phase-7/p7-g4-networkpolicy-boundary-verification-report.md`
+  - Execution Log: `docs/phase-7/phase-7-execution-log.md`
+
+#### Actions & Commands Executed:
+
+1. **Baseline and Policy Inspection (Stage A):**
+   - Verified Git clean at HEAD `a353cddfb9981c623f015130b692214ed499d01e`.
+   - Verified Kubernetes context `k3d-urumi`, namespace `urumi`, release `urumi-store` at Revision 11.
+   - Captured all 6 workload readiness states (`urumi-gateway-6d56bd4644-98s4l`, `urumi-mariadb-0`, `urumi-mcp-crm-7fc69678df-cglbg`, `urumi-mcp-tasks-86964f8b95-n6cnz`, `urumi-woocommerce-mcp-68dd5696d7-c2xfp`, `urumi-wordpress-d994966c6-jffwh`) — all 1/1 Running & Ready with 0 restarts.
+   - Inspected YAML definitions for all 6 NetworkPolicies in `urumi`: `urumi-gateway-netpol`, `urumi-mariadb-netpol`, `urumi-mcp-crm-netpol`, `urumi-mcp-tasks-netpol`, `urumi-woocommerce-mcp-netpol`, `urumi-wordpress-netpol`.
+   - Mapped expected communication matrix across all source and destination combinations.
+
+2. **Allowed Paths Verification (Stage B):**
+   - **Gateway → WooCommerce MCP (`urumi-woocommerce-mcp:3000`):** Socket handshake completed in 7 ms; HTTP GET `/health` returned HTTP 200 (`{"status":"ok","service":"urumi-woocommerce-mcp"}`); MCP JSON-RPC `tools/list` discovered all 5 tools (`list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`).
+   - **Gateway → CRM MCP (`urumi-mcp-crm:3000`):** Socket handshake completed in 8 ms; HTTP GET `/health` returned HTTP 200 (`{"status":"ok","service":"urumi-mcp-crm"}`); MCP JSON-RPC `tools/list` discovered 2 tools (`search_contacts`, `get_contact`).
+   - **Gateway → Tasks MCP (`urumi-mcp-tasks:3000`):** Socket handshake completed in 7 ms; HTTP GET `/health` returned HTTP 200 (`{"status":"ok","service":"urumi-mcp-tasks"}`); MCP JSON-RPC `tools/list` discovered 3 tools (`create_task`, `list_tasks`, `update_task_status`).
+   - **WooCommerce MCP → WordPress (`urumi-wordpress:80`):** Handshake completed; HTTP GET `/wp-json/` returned HTTP 200 (`"siteName":"Urumi Store Demo"`, namespace `wc/v3` present).
+   - **WordPress → MariaDB (`urumi-mariadb:3306`):** Socket connected; returned MariaDB handshake banner (`11.4.5-MariaDB`).
+   - **CoreDNS (`kube-dns:53`):** Verified internal cluster resolution across all workloads in under 100 ms.
+   - **Traefik Ingress:** Verified external ingress to Gateway Dashboard (port 3001, HTTP 200) and WordPress storefront (port 80, HTTP 301/200).
+
+3. **Denied Paths Verification (Stage C):**
+   - **Gateway → WordPress directly (`urumi-wordpress:80`):** Rejected (`ECONNREFUSED` in 7 ms).
+   - **Gateway → MariaDB directly (`urumi-mariadb:3306`):** Rejected (`ECONNREFUSED` in 8 ms).
+   - **CRM MCP → WordPress directly (`urumi-wordpress:80`):** Rejected (`ECONNREFUSED` in 8 ms).
+   - **Tasks MCP → MariaDB directly (`urumi-mariadb:3306`):** Rejected (`ECONNREFUSED` in 95 ms).
+   - **WooCommerce MCP → MariaDB directly (`urumi-mariadb:3306`):** Rejected (`ECONNREFUSED` in 91 ms).
+   - **Cross-Workload Isolation:** CRM → Tasks:3000 (`ECONNREFUSED`), Tasks → CRM:3000 (`ECONNREFUSED`), WooCommerce MCP → CRM:3000 (`ECONNREFUSED`), WordPress → Gateway:3000 (`Connection refused`, exit 7), MariaDB → Gateway:3000 (`Connection refused`).
+   - Corroborated with active listening endpoints: Every destination port was verified listening and accepting traffic from authorized peers, proving packet rejection is definitively NetworkPolicy-enforced.
+
+4. **Post-Test Regression & Invariant Verification (Stage D):**
+   - All 6 platform workloads remain 1/1 Running & Ready with zero restarts.
+   - Gateway readiness returned HTTP 200; all 10 tools discovered across the 3 upstreams.
+   - P7-G2 container hardening confirmed active: WooCommerce MCP root filesystem read-only (`EROFS`) with `/tmp` writable; CRM and Tasks ServiceAccount token mounts disabled.
+   - Gateway ServiceAccount `urumi-gateway-sa` and RBAC binding to `urumi-gateway-secrets` unchanged.
+   - `urumi-gateway-pvc` remains `Bound`.
+   - SQLite integrity `ok`, foreign key violations 0, row counts 100% match pre-test baseline: `schema_migrations: 3`, `upstreams: 3`, `users: 4`, `user_credentials: 4`, `api_keys: 27`, `user_invitations: 4`, `browser_sessions: 27`, `audit_logs: 483`.
+   - Protected store products (10, 11, 12) and Order #14 retained baseline state with zero drift.
+   - Hermetic unit tests: `woocommerce-mcp` (17/17 passed), `gateway` (351/351 passed across 51 test suites).
+
+---
+
 ## 2. Gate Summary & Stop Boundary
 
 - **Gate P7-G0 Status:** **COMPLETE**
 - **Gate P7-G1 Status:** **COMPLETE**
 - **Gate P7-G2 Status:** **COMPLETE**
-- **Gate P7-G3 Status:** **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
-- **Implementation Status:** **CONTROLLER-MANAGED POD-REPLACEMENT RECOVERY & PERSISTENCE EMPIRICALLY VERIFIED; ZERO DATA DISCREPANCIES DETECTED**
-- **Next Gate:** P7-G4 (Egress Network Policy & Local Boundary Verification) pending Technical Head authorization.
-- **Formal Stop Notice:** **P7-G3 submitted for Technical Head review. P7-G4 and P7-G5 remain unauthorized pending explicit approval.**
+- **Gate P7-G3 Status:** **COMPLETE**
+- **Gate P7-G4 Status:** **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
+- **Implementation Status:** **NETWORKPOLICY BOUNDARY VERIFICATION COMPLETED; ALL ALLOWED AND DENIED PATHS EMPIRICALLY CONFIRMED**
+- **Next Gate:** P7-G5 (Full Platform Regression Qualification) pending explicit Technical Head authorization.
+- **Formal Stop Notice:** **P7-G4 submitted for Technical Head review. P7-G5 regression qualification and all NetworkPolicy changes remain unauthorized pending explicit approval.**
+
