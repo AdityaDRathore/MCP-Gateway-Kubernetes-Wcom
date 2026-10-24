@@ -421,14 +421,64 @@
 
 ---
 
+### Gate P7-G5: Regression Qualification
+- **Execution Date**: October 24, 2026
+- **Worker**: Implementation Worker reporting to Technical Head
+- **Status**: **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
+- **Operational Scope**: Full platform automated regression test suite execution, builds, typechecks, Helm lint/render security verification, and read-only runtime regression across all 6 workloads on cluster `k3d-urumi`. Zero code/policy/template changes, zero commits, zero store or database mutations.
+- **Starting Reference Git Commit**: `a353cddfb9981c623f015130b692214ed499d01e` (`a353cdd`)
+- **Current HEAD SHA**: `3b7644b615124e0c456b1e83936133faaa4cf252` (`3b7644b`)
+- **Ending Git Commit**: `3b7644b615124e0c456b1e83936133faaa4cf252` (`3b7644b`)
+- **Deliverables**:
+  - Regression Qualification Report: `docs/phase-7/p7-g5-regression-qualification-report.md`
+  - Execution Log: `docs/phase-7/phase-7-execution-log.md`
+
+#### Actions & Commands Executed:
+
+1. **Baseline Reconciliation & Test Inventory (Stage A):**
+   - Reconciled Git history: HEAD `3b7644b` contains P7-G4 documentation updates on top of reference SHA `a353cdd`. Clean working tree.
+   - Inventoried 14 test, build, lint, and rendering suites across `apps/` and `packages/`.
+   - Verified that cluster context `k3d-urumi`, release `urumi-store` (Revision 11), and 6 workloads remain 1/1 Running & Ready.
+
+2. **Automated Regression Suite Execution (Stage B):**
+   - `apps/gateway` unit tests: 351/351 passed across 51 test suites (0 failures).
+   - `apps/gateway` protocol tests: 62/62 passed across 18 test suites (0 failures).
+   - `apps/gateway` integration tests (`stage3-concurrency-stress.test.ts`): 8/8 passed across 2 suites (0 failures).
+   - `apps/woocommerce-mcp` unit tests: 17/17 passed across 5 suites (0 failures).
+   - `apps/woocommerce-mcp` protocol tests: 35/35 passed across 7 suites (0 failures).
+   - `apps/mcp-crm` unit & protocol tests: 20/20 unit passed, 6/6 protocol passed (0 failures).
+   - `apps/mcp-tasks` unit & protocol tests: 27/27 unit passed, 8/8 protocol passed (0 failures).
+   - Total automated tests passed: 534 passed, 0 failures.
+   - Builds & typechecks: `packages/shared` build (0 errors), `apps/dashboard` build (passed in 2.05s), `gateway` typecheck (0 errors), `woocommerce-mcp` typecheck (0 errors), `crm` typecheck (0 errors), `tasks` typecheck (0 errors).
+   - Helm qualification: `helm lint` passed with 0 failures for local and prod profiles. Rendered prod manifest confirmed `readOnlyRootFilesystem: true`, `/tmp` `emptyDir`, `automountServiceAccountToken: false` on CRM/Tasks, and zero `test-client` ingress rules.
+   - Safely skipped: `p6-g4-external-mcp-acceptance.test.ts` (protects live cluster from fixture generation) and `live-gemini-smoke.ts` (safety boundary compliance).
+
+3. **Read-Only Runtime Regression (Stage C):**
+   - Verified all 6 workloads 1/1 Running & Ready with 0 restarts.
+   - Gateway `/health/live` and `/health/ready` returned HTTP 200.
+   - Gateway tool discovery across the 3 upstreams discovered all 10 expected tools.
+   - Safe read-only MCP operations executed: `list_products` (returned products), `get_order: 14` (returned order without PII), `search_contacts` (executed), `list_tasks` (returned tasks).
+   - Hardening invariants confirmed: WooCommerce MCP rootfs is read-only (`EROFS`) and `/tmp` writable; CRM and Tasks have service account token mounts disabled.
+   - Gateway ServiceAccount `urumi-gateway-sa` and RBAC binding to `urumi-gateway-secrets` confirmed active.
+   - Gateway PVC `urumi-gateway-pvc` remains Bound.
+   - SQLite integrity `ok`, foreign key violations 0, row counts 100% match baseline: `schema_migrations: 3`, `upstreams: 3`, `users: 4`, `user_credentials: 4`, `api_keys: 27`, `user_invitations: 4`, `browser_sessions: 27`, `audit_logs: 483`.
+   - Storefront baseline verified via WP-CLI: Products 10, 11, 12 and Order #14 retained baseline fields with zero drift.
+
+4. **Security & Architectural Review (Stage D):**
+   - All Phase 7 acceptance areas (runtime hardening, persistence resilience, network boundary enforcement, tool routing, security perimeter, storefront baseline, and database integrity) fully qualified with empirical evidence.
+
+---
+
 ## 2. Gate Summary & Stop Boundary
 
 - **Gate P7-G0 Status:** **COMPLETE**
 - **Gate P7-G1 Status:** **COMPLETE**
 - **Gate P7-G2 Status:** **COMPLETE**
 - **Gate P7-G3 Status:** **COMPLETE**
-- **Gate P7-G4 Status:** **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
-- **Implementation Status:** **NETWORKPOLICY BOUNDARY VERIFICATION COMPLETED; ALL ALLOWED AND DENIED PATHS EMPIRICALLY CONFIRMED**
-- **Next Gate:** P7-G5 (Full Platform Regression Qualification) pending explicit Technical Head authorization.
-- **Formal Stop Notice:** **P7-G4 submitted for Technical Head review. P7-G5 regression qualification and all NetworkPolicy changes remain unauthorized pending explicit approval.**
+- **Gate P7-G4 Status:** **COMPLETE**
+- **Gate P7-G5 Status:** **COMPLETE — SUBMITTED FOR TECHNICAL HEAD APPROVAL**
+- **Implementation Status:** **FULL PLATFORM REGRESSION QUALIFICATION COMPLETED (534/534 TESTS PASSED, ZERO FAILURES, ZERO REGRESSIONS, ZERO DATA DRIFT)**
+- **Next Gate:** Phase 7 Final Review and Acceptance pending explicit Technical Head authorization.
+- **Formal Stop Notice:** **P7-G5 submitted for Technical Head review. Final Phase 7 handoff remains unauthorized pending explicit approval.**
+
 
