@@ -81,7 +81,7 @@ export const AuditTab: React.FC = () => {
 
   const handleStatusFilterChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setStatusFilter(e.target.value);
-    setOffset(0); // Reset to first page on filter change
+    setOffset(0);
   };
 
   const handlePrevPage = () => {
@@ -92,15 +92,13 @@ export const AuditTab: React.FC = () => {
     setOffset((prev) => prev + limit);
   };
 
-  const hasDegradedFinalization = audits.some(
-    (a) => a.status === 'unconfirmed_outcome' || a.errorCode === 'FINALIZATION_TIMEOUT'
-  );
-
   const formatTimestamp = (epochSeconds: number): string => {
     try {
-      return new Date(epochSeconds * 1000).toLocaleString(undefined, {
+      const ms = epochSeconds < 10000000000 ? epochSeconds * 1000 : epochSeconds;
+      const d = new Date(ms);
+      return d.toLocaleString('en-US', {
         year: 'numeric',
-        month: '2-digit',
+        month: 'short',
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
@@ -120,34 +118,12 @@ export const AuditTab: React.FC = () => {
         return <span className="badge badge-danger">failed</span>;
       case 'timeout':
         return <span className="badge badge-warning">timeout</span>;
+      case 'unconfirmed_outcome':
+        return <span className="badge badge-warning">unconfirmed</span>;
       case 'client_disconnected':
         return <span className="badge badge-warning">disconnected</span>;
       case 'pending':
-        return (
-          <span
-            className="badge"
-            style={{
-              background: 'rgba(148, 163, 184, 0.2)',
-              color: '#94a3b8',
-              border: '1px solid rgba(148, 163, 184, 0.4)',
-            }}
-          >
-            pending...
-          </span>
-        );
-      case 'unconfirmed_outcome':
-        return (
-          <span
-            className="badge badge-danger"
-            style={{
-              background: 'rgba(239, 68, 68, 0.25)',
-              border: '1px solid var(--status-danger)',
-              letterSpacing: '0.02em',
-            }}
-          >
-            unconfirmed
-          </span>
-        );
+        return <span className="badge badge-admin">pending</span>;
       default:
         return <span className="badge">{status}</span>;
     }
@@ -158,197 +134,106 @@ export const AuditTab: React.FC = () => {
 
   return (
     <div id="audit-tab-view" className="animate-fade-in">
-      {/* Header & Controls */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          flexWrap: 'wrap',
-          gap: '1rem',
-          marginBottom: '1.5rem',
-        }}
-      >
+      {/* WordPress Page Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h2 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>Immutable Audit Logging Trail</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-            Authoritative, tamper-evident record of all downstream tool execution events across registered upstreams.
+          <h1 style={{ fontSize: '23px', fontWeight: 600, color: 'var(--wp-text-primary)' }}>
+            Audit Trail &amp; Immutable Ledger
+          </h1>
+          <p style={{ color: 'var(--wp-text-secondary)', fontSize: '13px' }}>
+            Authoritative, tamper-resistant record of all Model Context Protocol tool execution events and caller identities.
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          {/* Status Filter */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <label htmlFor="audit-status-filter" style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-              Status:
-            </label>
-            <select
-              id="audit-status-filter"
-              value={statusFilter}
-              onChange={handleStatusFilterChange}
-              style={{
-                background: 'var(--bg-card)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-sm)',
-                padding: '0.4rem 0.75rem',
-                fontSize: '0.8125rem',
-              }}
-            >
-              <option value="">All Statuses</option>
-              <option value="success">Success</option>
-              <option value="failed">Failed</option>
-              <option value="timeout">Timeout</option>
-              <option value="unconfirmed_outcome">Unconfirmed Outcome</option>
-              <option value="client_disconnected">Disconnected</option>
-              <option value="pending">Pending</option>
-            </select>
-          </div>
+        <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'center' }}>
+          <select
+            id="audit-status-filter"
+            value={statusFilter}
+            onChange={handleStatusFilterChange}
+            className="form-select"
+            style={{ padding: '0.25rem 0.65rem', fontSize: '12px', minHeight: '30px', width: 'auto' }}
+          >
+            <option value="">All Statuses</option>
+            <option value="success">Success</option>
+            <option value="failed">Failed</option>
+            <option value="timeout">Timeout</option>
+            <option value="unconfirmed_outcome">Unconfirmed</option>
+            <option value="pending">Pending</option>
+          </select>
 
-          {/* Refresh Button */}
           <button
             id="btn-refresh-audit"
             className="btn btn-secondary"
             onClick={fetchAudits}
             disabled={loading}
-            style={{ padding: '0.4rem 0.85rem', fontSize: '0.8125rem' }}
+            style={{ padding: '0.25rem 0.75rem', fontSize: '13px', minHeight: '30px' }}
           >
-            {loading ? 'Refreshing...' : '↻ Refresh'}
+            {loading ? 'Refreshing...' : '🔄 Refresh'}
           </button>
         </div>
       </div>
 
-      {/* Operational Warning for Degraded Audit Finalization */}
-      {hasDegradedFinalization && (
-        <div
-          id="audit-degraded-warning-banner"
-          style={{
-            background: 'rgba(245, 158, 11, 0.12)',
-            border: '1px solid rgba(245, 158, 11, 0.4)',
-            borderRadius: 'var(--radius-md)',
-            padding: '0.85rem 1.25rem',
-            marginBottom: '1.5rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <span style={{ fontSize: '1.25rem' }}>⚠️</span>
-          <div>
-            <strong style={{ color: 'var(--status-warning)', fontSize: '0.875rem' }}>
-              Operational Feedback — Audit Finalization Degraded:
-            </strong>
-            <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>
-              One or more recent tool calls encountered a timeout or unconfirmed outcome during finalization.
-              Downstream operations may have partially or fully executed. Do not blindly retry mutating actions without
-              verifying entity state in WooCommerce or upstream systems.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Error State */}
+      {/* WordPress Error Notice */}
       {error && (
-        <div
-          id="audit-error-banner"
-          style={{
-            background: 'rgba(239, 68, 68, 0.12)',
-            border: '1px solid rgba(239, 68, 68, 0.4)',
-            borderRadius: 'var(--radius-md)',
-            padding: '1rem 1.25rem',
-            marginBottom: '1.5rem',
-            color: 'var(--status-danger)',
-            fontSize: '0.875rem',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <span>{error}</span>
-          <button
-            className="btn btn-secondary"
-            onClick={fetchAudits}
-            style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
-          >
-            Retry
-          </button>
+        <div className="wp-notice wp-notice-error animate-fade-in">
+          <span>⚠️ {error}</span>
+          <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', color: '#50575e', cursor: 'pointer' }}>✕</button>
         </div>
       )}
 
-      {/* Table & Data Container */}
+      {/* WordPress List Table */}
       <div className="data-table-container">
         <table className="data-table">
           <thead>
             <tr>
-              <th>Recorded At</th>
-              <th>Tool Called</th>
-              <th>Upstream</th>
-              <th>Caller</th>
+              <th>Timestamp</th>
               <th>Status</th>
-              <th style={{ textAlign: 'right' }}>Duration</th>
-              <th>Error Details</th>
+              <th>Tool Name</th>
+              <th>Upstream</th>
+              <th>Operator</th>
+              <th>Duration</th>
+              <th>Diagnostics</th>
             </tr>
           </thead>
           <tbody>
-            {loading && audits.length === 0 ? (
+            {loading ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-secondary)' }}>
-                  Loading authoritative audit records...
+                <td colSpan={7} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--wp-text-muted)' }}>
+                  Loading audit events from SQLite WAL ledger...
                 </td>
               </tr>
             ) : audits.length === 0 ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-secondary)' }}>
-                  No audit logs matching current query parameters.
+                <td colSpan={7} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--wp-text-muted)' }}>
+                  No audit log events found.
                 </td>
               </tr>
             ) : (
-              audits.map((item) => (
-                <tr key={item.id} id={`audit-row-${item.id}`}>
-                  <td
-                    style={{
-                      color: 'var(--text-secondary)',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '0.8125rem',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {formatTimestamp(item.createdAt)}
+              audits.map((a) => (
+                <tr key={a.id}>
+                  <td style={{ color: 'var(--wp-text-secondary)', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                    {formatTimestamp(a.createdAt)}
+                  </td>
+                  <td>{renderStatusBadge(a.status)}</td>
+                  <td>
+                    <code style={{ color: '#135e96', fontWeight: 600 }}>{a.toolName}</code>
                   </td>
                   <td>
-                    <span className="code-pill">{item.toolName}</span>
+                    <span className="code-pill">{a.upstreamSlug || 'internal'}</span>
                   </td>
-                  <td style={{ color: 'var(--text-secondary)' }}>{item.upstreamSlug || 'gateway'}</td>
                   <td>
-                    <strong style={{ fontSize: '0.8125rem' }}>
-                      {item.username || (item.userId ? `${item.userId.slice(0, 8)}...` : 'system')}
-                    </strong>
+                    <span style={{ fontWeight: 500, color: 'var(--wp-text-primary)' }}>
+                      {a.username || (a.userId ? a.userId.slice(0, 8) : 'Anonymous')}
+                    </span>
                   </td>
-                  <td>{renderStatusBadge(item.status)}</td>
-                  <td
-                    style={{
-                      textAlign: 'right',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '0.8125rem',
-                      color: 'var(--text-secondary)',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {item.durationMs !== null ? `${item.durationMs}ms` : '—'}
+                  <td style={{ color: 'var(--wp-text-muted)', fontSize: '12px' }}>
+                    {a.durationMs !== null ? `${a.durationMs}ms` : '--'}
                   </td>
-                  <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', maxWidth: '240px' }}>
-                    {item.errorCode ? (
-                      <span
-                        title={item.errorMessage || undefined}
-                        style={{ color: item.status === 'success' ? 'inherit' : 'var(--status-danger)' }}
-                      >
-                        {item.errorCode}
-                        {item.errorMessage ? `: ${item.errorMessage}` : ''}
-                      </span>
-                    ) : item.errorMessage ? (
-                      <span title={item.errorMessage}>{item.errorMessage}</span>
+                  <td style={{ fontSize: '11px', color: a.errorCode ? '#d63638' : 'var(--wp-text-muted)' }}>
+                    {a.errorCode || a.errorMessage ? (
+                      <code>{a.errorCode || a.errorMessage}</code>
                     ) : (
-                      '—'
+                      'None'
                     )}
                   </td>
                 </tr>
@@ -358,38 +243,35 @@ export const AuditTab: React.FC = () => {
         </table>
       </div>
 
-      {/* Pagination Footer */}
+      {/* WordPress Pagination Bar */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginTop: '1.25rem',
-          padding: '0 0.5rem',
+          marginTop: '1rem',
+          padding: '0.5rem 0',
         }}
       >
-        <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-          Showing {audits.length} record{audits.length === 1 ? '' : 's'} (Page {currentPage}, offset {offset})
+        <span style={{ fontSize: '12px', color: 'var(--wp-text-secondary)' }}>
+          Page <strong>{currentPage}</strong> (Showing up to {limit} records per page)
         </span>
-
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.4rem' }}>
           <button
-            id="btn-audit-prev-page"
-            className="btn btn-secondary"
             onClick={handlePrevPage}
             disabled={offset === 0 || loading}
-            style={{ padding: '0.35rem 0.8rem', fontSize: '0.8125rem' }}
+            className="btn btn-secondary"
+            style={{ padding: '0.2rem 0.65rem', minHeight: '28px', fontSize: '12px' }}
           >
-            ← Previous
+            « Previous
           </button>
           <button
-            id="btn-audit-next-page"
-            className="btn btn-secondary"
             onClick={handleNextPage}
             disabled={!hasMore || loading}
-            style={{ padding: '0.35rem 0.8rem', fontSize: '0.8125rem' }}
+            className="btn btn-secondary"
+            style={{ padding: '0.2rem 0.65rem', minHeight: '28px', fontSize: '12px' }}
           >
-            Next →
+            Next »
           </button>
         </div>
       </div>

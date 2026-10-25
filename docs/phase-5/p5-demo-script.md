@@ -158,7 +158,7 @@ echo "Issued Key ID: $KEY_ID"
 echo "Issued Key: $DEMO_KEY"
 ```
 
----
+---DemoSecure123!
 
 ### Step 6: Authenticated MCP Protocol Tool Invocation
 

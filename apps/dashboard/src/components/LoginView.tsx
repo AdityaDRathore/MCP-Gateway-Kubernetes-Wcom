@@ -22,7 +22,7 @@ export const LoginView: React.FC = () => {
     setIsSubmitting(false);
 
     if (!result.success) {
-      setError(result.error || 'Authentication failed. Please verify your credentials.');
+      setError(result.error || 'Authentication failed. Please check your username and password.');
     }
   };
 
@@ -31,93 +31,57 @@ export const LoginView: React.FC = () => {
       id="login-view-container"
       style={{
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: '100vh',
-        padding: '1.5rem',
+        padding: '2rem 1.5rem',
+        background: '#f0f0f1',
       }}
     >
+      {/* WordPress Official Mark */}
+      <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+        <svg width="84" height="84" viewBox="0 0 20 20" fill="#1d2327">
+          <path d="M10 0C4.477 0 0 4.477 0 10c0 5.523 4.477 10 10 10s10-4.477 10-10c0-5.523-4.477-10-10-10zm0 1.25c4.832 0 8.75 3.918 8.75 8.75 0 2.227-.833 4.26-2.207 5.81l-4.52-12.388c.026-.007.054-.015.083-.021.572-.115 1.137-.184 1.137-.184s.138-.023.138-.184c0-.161-.253-.161-.253-.161l-3.565.184s-.138.023-.138.184c0 .161.161.184.161.184s.552.069 1.058.161l2.484 6.786-3.473-9.513c.023-.008.046-.017.07-.024.575-.115 1.138-.184 1.138-.184s.138-.023.138-.184c0-.161-.253-.161-.253-.161l-3.565.184s-.138.023-.138.184c0 .161.161.184.161.184s.552.069 1.058.161l3.565 9.765L6.44 3.738s.552-.069 1.058-.161c0 0 .161-.023.161-.184 0-.161-.138-.184-.138-.184l-3.565.184s-.138.023-.138.184c0 .161.161.184.161.184s.552.069 1.058.161c.025.005.048.012.072.018L1.758 12.92A8.72 8.72 0 0 1 1.25 10c0-4.832 3.918-8.75 8.75-8.75zm-6.52 9.435L6.685 17.5A8.71 8.71 0 0 1 2.37 12.44c.32-.056.702-.12 1.11-.155zm6.543 8.058c-1.282 0-2.485-.276-3.57-.77l3.714-10.793 3.805 10.428a8.71 8.71 0 0 1-3.95.135h.001z" />
+        </svg>
+        <div style={{ marginTop: '0.5rem', fontWeight: 600, fontSize: '16px', color: '#1d2327' }}>
+          Urumi Store Administration
+        </div>
+      </div>
+
+      {/* Login Box */}
       <div
-        className="glass-panel animate-fade-in"
+        className="wp-card animate-fade-in"
         style={{
           width: '100%',
-          maxWidth: '440px',
-          padding: '2.5rem',
+          maxWidth: '380px',
+          padding: '2rem 1.75rem',
+          background: '#ffffff',
+          border: '1px solid #c3c4c7',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+          borderRadius: '4px',
         }}
       >
-        {/* Brand Header */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '56px',
-              height: '56px',
-              borderRadius: 'var(--radius-md)',
-              background: 'linear-gradient(135deg, var(--brand-primary), var(--accent-cyan))',
-              marginBottom: '1rem',
-              boxShadow: '0 8px 24px var(--brand-glow)',
-            }}
-          >
-            <svg
-              width="30"
-              height="30"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#ffffff"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-            </svg>
-          </div>
-          <h1 style={{ fontSize: '1.65rem', marginBottom: '0.5rem' }}>Urumi Team Gateway</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-            Kubernetes-Native MCP Gateway Dashboard
-          </p>
-        </div>
-
-        {/* Error Alert Banner */}
+        {/* Error Notice */}
         {error && (
           <div
             id="login-error-banner"
-            className="animate-fade-in"
-            style={{
-              padding: '0.85rem 1rem',
-              marginBottom: '1.5rem',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--status-danger-bg)',
-              border: '1px solid var(--status-danger)',
-              color: '#fca5a5',
-              fontSize: '0.875rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-            }}
+            className="wp-notice wp-notice-error animate-fade-in"
+            style={{ margin: '0 0 1.25rem 0' }}
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="8" x2="12" y2="12"></line>
-              <line x1="12" y1="16" x2="12.01" y2="16"></line>
-            </svg>
             <span>{error}</span>
           </div>
         )}
 
-        {/* Login Form */}
         <form onSubmit={handleSubmit} id="login-form">
           <div className="form-group">
             <label className="form-label" htmlFor="login-username-input">
-              Username
+              Username or Email Address
             </label>
             <input
               id="login-username-input"
               type="text"
               className="form-input"
-              placeholder="e.g. admin or member"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               disabled={isSubmitting}
@@ -126,7 +90,7 @@ export const LoginView: React.FC = () => {
             />
           </div>
 
-          <div className="form-group" style={{ marginBottom: '1.75rem' }}>
+          <div className="form-group" style={{ marginBottom: '1.5rem' }}>
             <label className="form-label" htmlFor="login-password-input">
               Password
             </label>
@@ -134,7 +98,6 @@ export const LoginView: React.FC = () => {
               id="login-password-input"
               type="password"
               className="form-input"
-              placeholder="••••••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={isSubmitting}
@@ -147,30 +110,15 @@ export const LoginView: React.FC = () => {
             id="login-submit-button"
             type="submit"
             className="btn btn-primary"
-            style={{ width: '100%', padding: '0.85rem' }}
+            style={{ width: '100%', padding: '0.55rem', fontSize: '13px' }}
             disabled={isSubmitting}
           >
-            {isSubmitting ? (
-              <span>Authenticating...</span>
-            ) : (
-              <span>Sign In to Dashboard</span>
-            )}
+            {isSubmitting ? 'Authenticating...' : 'Log In'}
           </button>
         </form>
 
-        {/* Security Perimeter Notice */}
-        <div
-          style={{
-            marginTop: '2rem',
-            paddingTop: '1.25rem',
-            borderTop: '1px solid var(--border-subtle)',
-            fontSize: '0.75rem',
-            color: 'var(--text-muted)',
-            textAlign: 'center',
-            lineHeight: 1.4,
-          }}
-        >
-          🔒 Dual-Listener Security Perimeter Active: Browser API &amp; Session Controls strictly isolated on Port 3001.
+        <div style={{ marginTop: '1.5rem', borderTop: '1px solid #dcdcde', paddingTop: '1rem', fontSize: '12px', color: '#646970', textAlign: 'center' }}>
+          🔒 Port 3001 Isolated Browser Management Session
         </div>
       </div>
     </div>

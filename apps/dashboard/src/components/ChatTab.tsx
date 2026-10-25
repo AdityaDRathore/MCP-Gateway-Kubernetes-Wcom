@@ -70,7 +70,6 @@ export const ChatTab: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Build lightweight conversation history for backend context
       const historyPayload = newHistory.slice(-10).map((m) => ({
         role: m.role,
         content: m.text,
@@ -99,6 +98,8 @@ export const ChatTab: React.FC = () => {
           setErrorBanner('The model provider rate limit was exceeded. Please wait a moment and try again.');
         } else if (data.code === 'PROVIDER_TIMEOUT') {
           setErrorBanner('The chat request timed out after 30 seconds. Please try a simpler request.');
+        } else if (data.code === 'SESSION_MISSING' || data.code === 'SESSION_INVALID') {
+          setErrorBanner('Your session has expired or is invalid. Please sign out and log in again.');
         } else {
           setErrorBanner(data.error || 'Failed to communicate with the assistant.');
         }
@@ -113,7 +114,6 @@ export const ChatTab: React.FC = () => {
         return;
       }
 
-      // Check if turn requires user confirmation
       if (data.confirmationToken) {
         const requiredTool = data.toolCalls?.find((t: ChatToolCall) => t.status === 'confirmation_required');
         setPendingConfirmation({
@@ -236,48 +236,48 @@ export const ChatTab: React.FC = () => {
   };
 
   const samplePrompts = [
-    'What orders came in today?',
     'List all published products with prices',
-    'Search CRM contacts for "Sarah"',
+    'What orders came in recently?',
+    'Search customer contacts for "Sarah"',
     'Show pending high-priority tasks',
-    'Create a demo product named "Summer Cap" with price 29.99',
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 140px)', gap: '1rem' }}>
-      {/* Top Header Card */}
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)', gap: '1rem' }}>
+      {/* WordPress Card Header */}
       <div
+        className="wp-card"
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '1.25rem 1.75rem',
-          borderRadius: 'var(--radius-lg)',
-          background: 'var(--bg-surface-glass)',
-          border: '1px solid var(--border-subtle)',
-          backdropFilter: 'blur(16px)',
+          padding: '1rem 1.25rem',
+          background: '#ffffff',
+          border: '1px solid var(--wp-border)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
           <div
             style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: 'var(--radius-md)',
-              background: 'linear-gradient(135deg, var(--brand-primary), var(--accent-cyan))',
+              width: '36px',
+              height: '36px',
+              borderRadius: '3px',
+              background: 'var(--woo-purple)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 4px 16px var(--brand-glow)',
-              fontSize: '1.4rem',
+              color: '#ffffff',
+              fontSize: '18px',
             }}
           >
             🤖
           </div>
           <div>
-            <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>Urumi Platform Assistant</h2>
-            <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', margin: 0 }}>
-              Autonomous conversational agent executing tools across WooCommerce, CRM, and Tasks through the Gateway.
+            <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--wp-text-primary)', margin: 0 }}>
+              WooCommerce &amp; Store AI Copilot
+            </h2>
+            <p style={{ fontSize: '12px', color: 'var(--wp-text-secondary)', margin: 0 }}>
+              Autonomous conversational agent executing tools across WooCommerce catalog, Customer CRM, and Task lists.
             </p>
           </div>
         </div>
@@ -286,38 +286,21 @@ export const ChatTab: React.FC = () => {
           id="chat-clear-btn"
           onClick={clearChat}
           className="btn btn-secondary"
-          style={{ padding: '0.45rem 0.95rem', fontSize: '0.8125rem' }}
-          title="Clear ephemeral chat history"
+          style={{ padding: '0.25rem 0.65rem', fontSize: '12px', minHeight: '28px' }}
         >
-          🗑️ Clear Conversation
+          Clear Chat
         </button>
       </div>
 
-      {/* Error Banner */}
+      {/* Error Notice */}
       {errorBanner && (
-        <div
-          id="chat-error-banner"
-          style={{
-            padding: '1rem 1.25rem',
-            borderRadius: 'var(--radius-md)',
-            background: 'var(--status-danger-bg)',
-            border: '1px solid var(--status-danger)',
-            color: '#fca5a5',
-            fontSize: '0.875rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <span>⚠️</span>
-            <span>{errorBanner}</span>
-          </div>
+        <div className="wp-notice wp-notice-error animate-fade-in" id="chat-error-banner" style={{ margin: 0 }}>
+          <span>⚠️ {errorBanner}</span>
           <button
             onClick={() => setErrorBanner(null)}
-            style={{ background: 'none', border: 'none', color: '#fca5a5', cursor: 'pointer', fontSize: '1.1rem' }}
+            style={{ background: 'none', border: 'none', color: '#50575e', cursor: 'pointer' }}
           >
-            ×
+            ✕
           </button>
         </div>
       )}
@@ -328,74 +311,61 @@ export const ChatTab: React.FC = () => {
         style={{
           flex: 1,
           overflowY: 'auto',
-          padding: '1.5rem',
-          borderRadius: 'var(--radius-lg)',
-          background: 'rgba(10, 15, 26, 0.4)',
-          border: '1px solid var(--border-subtle)',
+          padding: '1.25rem',
+          background: '#ffffff',
+          border: '1px solid var(--wp-border)',
+          borderRadius: '4px',
+          boxShadow: 'var(--wp-shadow-card)',
           display: 'flex',
           flexDirection: 'column',
-          gap: '1.25rem',
+          gap: '1rem',
         }}
       >
         {messages.length === 0 ? (
           <div
             style={{
               margin: 'auto',
-              maxWidth: '600px',
+              maxWidth: '540px',
               textAlign: 'center',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              gap: '1.5rem',
+              gap: '1rem',
               padding: '2rem 1rem',
             }}
           >
             <div
               style={{
-                width: '64px',
-                height: '64px',
+                width: '48px',
+                height: '48px',
                 borderRadius: '50%',
-                background: 'rgba(99, 102, 241, 0.12)',
-                border: '1px solid var(--border-highlight)',
+                background: '#f0f6fc',
+                color: 'var(--wp-blue)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '2rem',
+                fontSize: '24px',
               }}
             >
               💬
             </div>
             <div>
-              <h3 style={{ fontSize: '1.2rem', fontWeight: 600, marginBottom: '0.5rem' }}>How can I help you today?</h3>
-              <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                Ask questions to query WooCommerce orders, inspect catalog inventory, look up CRM contacts, or create tasks.
+              <h3 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--wp-text-primary)', marginBottom: '0.35rem' }}>
+                How can I assist your WooCommerce store today?
+              </h3>
+              <p style={{ fontSize: '13px', color: 'var(--wp-text-secondary)', lineHeight: 1.45 }}>
+                Ask questions to query inventory, inspect customer orders, check stock levels, or manage team tasks.
               </p>
             </div>
 
             {/* Starter Suggestion Chips */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', justifyContent: 'center' }}>
               {samplePrompts.map((prompt, idx) => (
                 <button
                   key={idx}
                   onClick={() => handleSendMessage(prompt)}
-                  style={{
-                    background: 'var(--bg-surface)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--radius-full)',
-                    padding: '0.5rem 1rem',
-                    color: 'var(--text-secondary)',
-                    fontSize: '0.8125rem',
-                    cursor: 'pointer',
-                    transition: 'all var(--transition-fast)',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--brand-primary)';
-                    e.currentTarget.style.color = 'var(--text-primary)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--border-subtle)';
-                    e.currentTarget.style.color = 'var(--text-secondary)';
-                  }}
+                  className="btn btn-secondary"
+                  style={{ fontSize: '12px', padding: '0.25rem 0.65rem', minHeight: '28px' }}
                 >
                   {prompt}
                 </button>
@@ -412,28 +382,26 @@ export const ChatTab: React.FC = () => {
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: isUser ? 'flex-end' : 'flex-start',
-                  gap: '0.35rem',
+                  gap: '0.25rem',
                 }}
               >
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', padding: '0 0.5rem' }}>
-                  {isUser ? 'You' : 'Urumi Assistant'} • {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                <div style={{ fontSize: '11px', color: 'var(--wp-text-muted)', padding: '0 0.35rem' }}>
+                  {isUser ? 'You' : 'Store Assistant'} • {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </div>
 
                 <div
                   style={{
                     maxWidth: '85%',
-                    padding: '1rem 1.25rem',
-                    borderRadius: isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                    background: isUser
-                      ? 'linear-gradient(135deg, var(--brand-primary), #4f46e5)'
-                      : 'var(--bg-surface-elevated)',
-                    border: isUser ? 'none' : '1px solid var(--border-subtle)',
-                    color: '#fff',
-                    fontSize: '0.9375rem',
-                    lineHeight: '1.6',
+                    padding: '0.85rem 1.15rem',
+                    borderRadius: isUser ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
+                    background: isUser ? 'var(--wp-blue)' : '#f6f7f7',
+                    border: isUser ? '1px solid #135e96' : '1px solid #dcdcde',
+                    color: isUser ? '#ffffff' : 'var(--wp-text-primary)',
+                    fontSize: '13px',
+                    lineHeight: '1.55',
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
-                    boxShadow: isUser ? '0 4px 12px var(--brand-glow)' : '0 4px 12px rgba(0, 0, 0, 0.2)',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                   }}
                 >
                   {msg.text}
@@ -441,7 +409,7 @@ export const ChatTab: React.FC = () => {
 
                 {/* Render Tool Execution Pills */}
                 {msg.toolCalls && msg.toolCalls.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem', width: '100%', maxWidth: '85%' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.35rem', width: '100%', maxWidth: '85%' }}>
                     {msg.toolCalls.map((tc, idx) => {
                       const toolId = `${msg.id}-tool-${idx}`;
                       const isExpanded = !!expandedTools[toolId];
@@ -452,11 +420,11 @@ export const ChatTab: React.FC = () => {
                         <div
                           key={idx}
                           style={{
-                            background: 'rgba(0, 0, 0, 0.35)',
-                            border: '1px solid var(--border-subtle)',
-                            borderRadius: 'var(--radius-md)',
-                            padding: '0.5rem 0.85rem',
-                            fontSize: '0.8125rem',
+                            background: '#ffffff',
+                            border: '1px solid var(--wp-border-subtle)',
+                            borderRadius: '3px',
+                            padding: '0.45rem 0.75rem',
+                            fontSize: '12px',
                           }}
                         >
                           <div
@@ -469,34 +437,18 @@ export const ChatTab: React.FC = () => {
                               userSelect: 'none',
                             }}
                           >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                              <span style={{ fontSize: '0.9rem' }}>
-                                {isSuccess ? '✅' : isConfRequired ? '⏳' : '❌'}
-                              </span>
-                              <code style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>{tc.name}</code>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                              <span>{isSuccess ? '✅' : isConfRequired ? '⏳' : '❌'}</span>
+                              <code style={{ color: '#135e96', fontWeight: 600 }}>{tc.name}</code>
                               <span
-                                style={{
-                                  fontSize: '0.6875rem',
-                                  padding: '0.15rem 0.45rem',
-                                  borderRadius: 'var(--radius-full)',
-                                  background: isSuccess
-                                    ? 'var(--status-success-bg)'
-                                    : isConfRequired
-                                    ? 'var(--status-warning-bg)'
-                                    : 'var(--status-danger-bg)',
-                                  color: isSuccess
-                                    ? 'var(--status-success)'
-                                    : isConfRequired
-                                    ? 'var(--status-warning)'
-                                    : 'var(--status-danger)',
-                                  fontWeight: 600,
-                                }}
+                                className={`badge badge-${isSuccess ? 'success' : isConfRequired ? 'warning' : 'danger'}`}
+                                style={{ fontSize: '10px', padding: '0.1rem 0.4rem' }}
                               >
                                 {tc.status}
                               </span>
                             </div>
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-muted)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--wp-text-muted)' }}>
                               {tc.durationMs !== undefined && <span>{tc.durationMs}ms</span>}
                               <span>{isExpanded ? '▲' : '▼'}</span>
                             </div>
@@ -504,16 +456,18 @@ export const ChatTab: React.FC = () => {
 
                           {/* Expanded Arguments & Result View */}
                           {isExpanded && (
-                            <div style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
-                              <div style={{ marginBottom: '0.4rem' }}>
-                                <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 600 }}>Arguments:</span>
+                            <div style={{ marginTop: '0.45rem', borderTop: '1px solid #e2e4e7', paddingTop: '0.45rem' }}>
+                              <div style={{ marginBottom: '0.35rem' }}>
+                                <span style={{ color: 'var(--wp-text-muted)', fontSize: '11px', fontWeight: 600 }}>Arguments:</span>
                                 <pre
                                   style={{
-                                    background: 'rgba(0, 0, 0, 0.5)',
-                                    padding: '0.4rem',
-                                    borderRadius: 'var(--radius-sm)',
-                                    fontSize: '0.75rem',
+                                    background: '#f6f7f7',
+                                    padding: '0.35rem 0.5rem',
+                                    borderRadius: '3px',
+                                    fontSize: '11px',
                                     overflowX: 'auto',
+                                    border: '1px solid var(--wp-border-subtle)',
+                                    color: '#2c3338',
                                   }}
                                 >
                                   {JSON.stringify(tc.args, null, 2)}
@@ -522,16 +476,18 @@ export const ChatTab: React.FC = () => {
 
                               {tc.result !== undefined && (
                                 <div>
-                                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 600 }}>Result:</span>
+                                  <span style={{ color: 'var(--wp-text-muted)', fontSize: '11px', fontWeight: 600 }}>Result:</span>
                                   <pre
                                     style={{
-                                      background: 'rgba(0, 0, 0, 0.5)',
-                                      padding: '0.4rem',
-                                      borderRadius: 'var(--radius-sm)',
-                                      fontSize: '0.75rem',
+                                      background: '#f6f7f7',
+                                      padding: '0.35rem 0.5rem',
+                                      borderRadius: '3px',
+                                      fontSize: '11px',
                                       overflowX: 'auto',
-                                      maxHeight: '180px',
+                                      maxHeight: '160px',
                                       overflowY: 'auto',
+                                      border: '1px solid var(--wp-border-subtle)',
+                                      color: '#2c3338',
                                     }}
                                   >
                                     {typeof tc.result === 'object'
@@ -554,92 +510,53 @@ export const ChatTab: React.FC = () => {
 
         {/* Loading Indicator */}
         {isLoading && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: 'var(--text-secondary)', padding: '0.5rem' }}>
-            <div
-              style={{
-                width: '16px',
-                height: '16px',
-                border: '2px solid var(--brand-primary)',
-                borderTopColor: 'transparent',
-                borderRadius: '50%',
-                animation: 'spin 0.8s linear infinite',
-              }}
-            />
-            <span style={{ fontSize: '0.875rem' }}>Assistant is consulting gateway tools...</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', color: 'var(--wp-text-secondary)', padding: '0.5rem', fontSize: '13px' }}>
+            <span style={{ fontSize: '16px' }}>⚙️</span>
+            <span>Consulting WooCommerce MCP tools...</span>
           </div>
         )}
 
-        {/* Pending Confirmation Modal / Card */}
+        {/* Pending Confirmation Notice */}
         {pendingConfirmation && (
           <div
             id="chat-confirmation-card"
+            className="wp-notice wp-notice-warning"
             style={{
-              padding: '1.25rem 1.5rem',
-              borderRadius: 'var(--radius-md)',
-              background: 'rgba(245, 158, 11, 0.08)',
-              border: '1px solid var(--status-warning)',
-              display: 'flex',
+              margin: '0.5rem 0',
               flexDirection: 'column',
-              gap: '0.85rem',
-              boxShadow: '0 8px 24px rgba(245, 158, 11, 0.15)',
+              alignItems: 'stretch',
+              gap: '0.75rem',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-              <span style={{ fontSize: '1.25rem' }}>⚠️</span>
-              <div>
-                <h4 style={{ margin: 0, fontSize: '0.9375rem', color: 'var(--status-warning)' }}>
-                  State Mutation Requires Your Confirmation
-                </h4>
-                <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-                  The model proposed an action that modifies persistent state. Security policy mandates explicit user authorization.
-                </p>
-              </div>
+            <div>
+              <strong style={{ color: '#996800', fontSize: '13px' }}>
+                ⚠️ Security Confirmation Required
+              </strong>
+              <p style={{ margin: '0.25rem 0 0', color: 'var(--wp-text-secondary)', fontSize: '12px' }}>
+                The assistant is proposing an action that mutates store records. Confirmation is required.
+              </p>
             </div>
 
-            <div
-              style={{
-                background: 'rgba(0, 0, 0, 0.4)',
-                padding: '0.75rem 1rem',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: '0.8125rem',
-                border: '1px solid var(--border-subtle)',
-              }}
-            >
-              <div style={{ marginBottom: '0.35rem' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Action: </span>
-                <code style={{ color: 'var(--accent-cyan)' }}>{pendingConfirmation.toolCall?.name || 'Proposed Action'}</code>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-muted)' }}>Parameters: </span>
-                <pre style={{ margin: '0.25rem 0 0', fontSize: '0.75rem' }}>
-                  {JSON.stringify(pendingConfirmation.toolCall?.args ?? {}, null, 2)}
-                </pre>
-              </div>
+            <div style={{ background: '#ffffff', padding: '0.5rem 0.75rem', borderRadius: '3px', border: '1px solid #fae8a7', fontSize: '12px' }}>
+              <strong>Prompt:</strong> {pendingConfirmation.prompt}
             </div>
 
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
               <button
-                id="chat-cancel-confirm-btn"
                 onClick={handleCancelConfirmation}
-                disabled={isLoading}
                 className="btn btn-secondary"
-                style={{ padding: '0.5rem 1rem', fontSize: '0.8125rem' }}
+                disabled={isLoading}
+                style={{ padding: '0.25rem 0.65rem', minHeight: '28px', fontSize: '12px' }}
               >
-                Cancel
+                Reject &amp; Cancel
               </button>
               <button
-                id="chat-execute-confirm-btn"
                 onClick={handleConfirmAction}
-                disabled={isLoading}
                 className="btn btn-primary"
-                style={{
-                  padding: '0.5rem 1.25rem',
-                  fontSize: '0.8125rem',
-                  background: 'var(--status-success)',
-                  borderColor: 'var(--status-success)',
-                }}
+                disabled={isLoading}
+                style={{ padding: '0.25rem 0.65rem', minHeight: '28px', fontSize: '12px' }}
               >
-                {isLoading ? 'Executing...' : '✓ Confirm & Execute Action'}
+                {isLoading ? 'Executing...' : 'Approve & Execute Mutation'}
               </button>
             </div>
           </div>
@@ -648,61 +565,47 @@ export const ChatTab: React.FC = () => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Form Bar */}
+      {/* Chat Input Box */}
       <div
+        className="wp-card"
         style={{
+          background: '#ffffff',
+          border: '1px solid var(--wp-border)',
+          padding: '0.75rem 1rem',
           display: 'flex',
           gap: '0.75rem',
-          padding: '0.75rem',
-          borderRadius: 'var(--radius-lg)',
-          background: 'var(--bg-surface-glass)',
-          border: '1px solid var(--border-subtle)',
           alignItems: 'flex-end',
         }}
       >
         <textarea
           ref={textareaRef}
-          id="chat-prompt-input"
+          id="chat-input-textarea"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask a question or request an action... (Press Enter to send, Shift+Enter for newline)"
+          placeholder="Ask a question or issue a command (e.g. 'List our published products with stock levels')..."
           disabled={isLoading}
           rows={2}
           style={{
             flex: 1,
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--text-primary)',
-            fontSize: '0.9375rem',
-            fontFamily: 'inherit',
+            padding: '0.5rem 0.75rem',
+            fontSize: '13px',
+            fontFamily: 'var(--wp-font-sans)',
+            border: '1px solid #8c8f94',
+            borderRadius: '4px',
             resize: 'none',
             outline: 'none',
-            padding: '0.5rem',
           }}
         />
 
         <button
           id="chat-send-btn"
           onClick={() => handleSendMessage()}
-          disabled={isLoading || !input.trim()}
           className="btn btn-primary"
-          style={{
-            padding: '0.75rem 1.5rem',
-            fontSize: '0.875rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-          }}
+          disabled={!input.trim() || isLoading}
+          style={{ minHeight: '44px', padding: '0 1.25rem', fontSize: '13px' }}
         >
-          {isLoading ? (
-            <span>Sending...</span>
-          ) : (
-            <>
-              <span>Send</span>
-              <span>➔</span>
-            </>
-          )}
+          {isLoading ? 'Processing...' : 'Send Message'}
         </button>
       </div>
     </div>

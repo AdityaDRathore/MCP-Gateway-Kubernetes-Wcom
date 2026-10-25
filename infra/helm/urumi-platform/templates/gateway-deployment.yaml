@@ -106,6 +106,16 @@ spec:
               value: "4"
             - name: KUBERNETES_SECRETS_NAMESPACE
               value: {{ .Values.gateway.secretsNamespace | default "urumi-gateway-secrets" | quote }}
+            - name: CHAT_PROVIDER
+              value: {{ .Values.gateway.chatProvider | default "gemini" | quote }}
+            - name: GEMINI_MODEL
+              value: {{ .Values.gateway.geminiModel | default "gemini-flash-lite-latest" | quote }}
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: urumi-gemini-secret
+                  key: GEMINI_API_KEY
+                  optional: true
           volumeMounts:
             - name: gateway-data
               mountPath: /data
