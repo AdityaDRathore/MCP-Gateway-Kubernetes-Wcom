@@ -5,7 +5,7 @@
 [![Helm 3](https://img.shields.io/badge/Helm-v3.17.1-0F1689?logo=helm&logoColor=white)](https://helm.sh/)
 [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-v1.32.1%20(Streamable%20HTTP)-blueviolet)](https://modelcontextprotocol.io/)
 [![Tests](https://img.shields.io/badge/Tests-534%2F534%20Passed%20(100%25)-brightgreen)](docs/phase-7/p7-g5-regression-qualification-report.md)
-[![Security Hardened](https://img.shields.io/badge/Container%20Security-Read--Only%20Rootfs%20%7C%20Non--Root-orange)](docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md)
+[![Container Security](https://img.shields.io/badge/Container%20Security-Read--Only%20Rootfs%20%7C%20Non--Root-orange)](docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md)
 
 A unified, authenticated, and audited **Model Context Protocol (MCP) Gateway** deployed on Kubernetes. It provides governed, multi-tenant AI tool access to a stateful WooCommerce store and internal team microservices across two decoupled perimeters: an **in-dashboard AI assistant** for human operators and a **Streamable HTTP endpoint** for external AI clients (Claude Code, Cursor, MCP Inspector).
 
@@ -13,50 +13,38 @@ Submitted by **Aditya Rathore** for Round 1 of the **Urumi AI Founding DevOps / 
 
 ---
 
-## Quick Navigation
+## Table of Contents
 
-- [Demo Video & Walkthrough](#-demo-video--walkthrough)
-- [Architecture At A Glance](#-architecture-at-a-glance)
-- [Monorepo Structure](#-monorepo-structure)
-- [Local Setup Instructions (k3d / K3s)](#-local-setup-instructions-k3d--k3s)
-- [Production / VPS Deployment Guide](#-production--vps-deployment-guide-k3s)
-- [User & Verification Workflows](#-user--verification-workflows)
+- [Submission Overview](#submission-overview)
+- [Architecture & Protocol Flow](#architecture--protocol-flow)
+- [Monorepo Structure](#monorepo-structure)
+- [Local Setup Instructions (k3d / K3s)](#local-setup-instructions-k3d--k3s)
+- [Production / VPS Deployment Guide (K3s)](#production--vps-deployment-guide-k3s)
+- [User & Verification Workflows](#user--verification-workflows)
   - [1. Storefront Checkout (Cash on Delivery)](#1-storefront-checkout-cash-on-delivery)
   - [2. In-Dashboard AI Assistant & Confirmation Engine](#2-in-dashboard-ai-assistant--confirmation-engine)
-  - [3. External MCP Client & Instant Revocation](#3-external-mcp-client--instant-revocation)
-- [System Design & Trade-Offs Note](#-system-design--trade-offs-note)
-- [Threat Model Note](#-threat-model-note)
-- [Stand-Out Differentiators Implemented](#-stand-out-differentiators-implemented)
-- [Automated Testing & Verification Baseline](#-automated-testing--verification-baseline)
-- [Phase Documentation Index](#-phase-documentation-index)
+  - [3. External MCP Client & Instant Key Revocation](#3-external-mcp-client--instant-key-revocation)
+- [System Design & Trade-Offs Note](#system-design--trade-offs-note)
+- [Threat Model Note](#threat-model-note)
+- [Stand-Out Items and Bonus Architecture Summary](#stand-out-items-and-bonus-architecture-summary)
+- [Automated Testing & Verification Baseline](#automated-testing--verification-baseline)
+- [Technical Documentation Index](#technical-documentation-index)
 
 ---
 
-## 🎥 Demo Video & Walkthrough
+## Submission Overview
 
-The complete 16–18 minute end-to-end recorded walkthrough covers:
-1. **System Introduction & Thank-You** to Namit and Divyanshu.
-2. **Live Architecture Drawing in draw.io** detailing request flows, ports, and boundaries.
-3. **Repository Tour & Code Mapping** connecting architecture to TypeScript implementation.
-4. **Kubernetes Deployment & PVC Persistence** inspection in terminal.
-5. **Live Product Walkthrough**:
-   - Admin upstream registration & dynamic 10-tool discovery.
-   - In-dashboard AI Chat Copilot with real-time badges and server-side HMAC mutation confirmation.
-   - Hard-blocked protection of baseline records (Order #14 and Product IDs 10–12).
-   - External MCP Client connecting via Bearer API key over Streamable HTTP.
-   - Single-prompt cross-server multi-turn reasoning (`crm` + `tasks`).
-   - Instant fail-closed API key revocation.
-6. **534-Test Automated Regression Baseline & Operational Trade-Offs**.
+This repository contains the complete implementation, infrastructure charts, automated test suites, and operational documentation for Round 1 of the Urumi AI FDE assignment.
 
-- **Demo Video Submission Link:** `[SUBMITTED_VIA_GOOGLE_FORM]` *(Loom / Drive link)*
-- **Demo Video Master Script:** [`docs/phase-8/demo-video-master-script.md`](docs/phase-8/demo-video-master-script.md)
-- **Live Architecture Drawing Guide:** [`docs/phase-8/demo-architecture-drawing-guide.md`](docs/phase-8/demo-architecture-drawing-guide.md)
-- **Screen-by-Screen Recording Cue Sheet:** [`docs/phase-8/demo-video-recording-cue-sheet.md`](docs/phase-8/demo-video-recording-cue-sheet.md)
-- **Round 2 Interview Preparation (22 Q&As):** [`docs/phase-8/demo-interview-preparation.md`](docs/phase-8/demo-interview-preparation.md)
+- **Candidate:** Aditya Rathore
+- **Evaluation Form Submission:** Submitted via the official portal at [https://forms.gle/nftwgyNeenSDmiRb6](https://forms.gle/nftwgyNeenSDmiRb6)
+- **Demonstration Video:** Recorded and submitted through the official evaluation form, covering architecture breakdown, live cluster state, storefront checkout, in-dashboard AI assistant with HMAC-SHA256 mutation confirmations, external MCP client tool execution across multiple upstreams, instant key revocation, and system failure isolation.
+- **Automated Test Coverage:** 534 passed out of 534 tests (100% pass rate) across unit, protocol, and integration test suites.
+- **Protected Core Fixtures:** Order #14 and Product IDs 10, 11, and 12 remain immutable and protected at the engine level.
 
 ---
 
-## 🏛 Architecture At A Glance
+## Architecture & Protocol Flow
 
 The platform enforces **Perimeter Isolation via Dual Listeners** ([ADR-020](docs/decisions/ADR-020-dual-listener-and-ingress-perimeter.md)). A single `urumi-gateway` Node.js process binds two distinct HTTP sockets:
 - **Port 3001 (Browser Listener):** Serves the compiled React 19 SPA and browser session REST APIs (`/api/v1/browser/*`). Authenticated via Scrypt-hashed passwords, opaque 256-bit session cookies, and dual CSRF/Origin validation.
@@ -64,57 +52,57 @@ The platform enforces **Perimeter Isolation via Dual Listeners** ([ADR-020](docs
 
 ```
 Downstream Clients (User A Browser / User B MCP Inspector)
-                         │
-                         ▼ Ingress (:8080 / :8443)
-┌────────────────────────────────────────────────────────────────────────┐
-│ Kubernetes Cluster (k3d / K3s: namespace urumi)                        │
-│                                                                        │
-│   Traefik Ingress:                                                     │
-│   • shop.127.0.0.1.nip.io:8080      ──> urumi-wordpress:80 (Store)     │
-│   • dashboard.127.0.0.1.nip.io:8080 ──> urumi-gateway:3001 (Port 3001) │
-│   • dashboard...nip.io:8080/mcp     ──> urumi-gateway:3000 (Port 3000) │
-│                                                                        │
-│   ┌────────────────────────────────────────────────────────────────┐   │
-│   │ urumi-gateway Pod (Single Replica Deployment)                  │   │
-│   │                                                                │   │
-│   │   [Port 3001] Browser Listener (React 19 SPA + Session API)    │   │
-│   │   [Port 3000] MCP Listener (Streamable HTTP /mcp + /admin/v1)  │   │
-│   │                                                                │   │
-│   │   Gateway Core Engine:                                         │   │
-│   │   • ToolRouter (20 Global / 4 Upstream Concurrency Pool)       │   │
-│   │   • Dynamic CatalogService ({server}__{tool} Namespacing)      │   │
-│   │   • Bounded Agent Loop (5 Iterations, 30s Deadline, 64KB Cap)  │   │
-│   │   • Confirmation Engine (HMAC-SHA256 Token, 60s TTL)           │   │
-│   │   • Two-Phase Audit Interceptor (Duration, SHA-256 Args Hash)  │   │
-│   │                                                                │   │
-│   │   Persistent Volume: /data/gateway.db                          │   │
-│   │   (Node.js 24 node:sqlite in WAL mode on 500 MiB PVC)          │   │
-│   └───────────────┬────────────────────────────┬───────────────────┘   │
-│                   │ ClusterIP (:3000)          │ ClusterIP (:3000)     │
-│                   ▼                            ▼                       │
-│   ┌───────────────────────────────┐    ┌───────────────────────────┐   │
-│   │ urumi-woocommerce-mcp (:3000) │    │ CRM & Tasks MCP (:3000)   │   │
-│   │ • Custom TypeScript Server    │    │ • urumi-mcp-crm (2 tools) │   │
-│   │ • 5 Approved Tools            │    │ • urumi-mcp-tasks (3 tools│   │
-│   │ • readOnlyRootFilesystem      │    │ • No ServiceAccount token │   │
-│   └───────────────┬───────────────┘    └───────────────────────────┘   │
-│                   │ OAuth 1.0a HMAC-SHA256 (:80)                       │
-│                   ▼                                                    │
-│   ┌───────────────────────────────┐                                    │
-│   │ urumi-wordpress Pod (:80)     │  NetworkPolicy Isolation:          │
-│   │ + MariaDB StatefulSet (:3306) │  Gateway cannot connect directly   │
-│   │ (Stateful PVCs: 1GiB + 1GiB)  │  to WordPress (80) or MariaDB(3306)│
-│   └───────────────────────────────┘                                    │
-└────────────────────────────────────────────────────────────────────────┘
+                         |
+                         v Ingress (:8080 / :8443)
++------------------------------------------------------------------------+
+| Kubernetes Cluster (k3d / K3s: namespace urumi)                        |
+|                                                                        |
+|   Traefik Ingress:                                                     |
+|   * shop.127.0.0.1.nip.io:8080      --> urumi-wordpress:80 (Store)     |
+|   * dashboard.127.0.0.1.nip.io:8080 --> urumi-gateway:3001 (Port 3001) |
+|   * dashboard...nip.io:8080/mcp     --> urumi-gateway:3000 (Port 3000) |
+|                                                                        |
+|   +----------------------------------------------------------------+   |
+|   | urumi-gateway Pod (Single Replica Deployment)                  |   |
+|   |                                                                |   |
+|   |   [Port 3001] Browser Listener (React 19 SPA + Session API)    |   |
+|   |   [Port 3000] MCP Listener (Streamable HTTP /mcp + /admin/v1)  |   |
+|   |                                                                |   |
+|   |   Gateway Core Engine:                                         |   |
+|   |   * ToolRouter (20 Global / 4 Upstream Concurrency Pool)       |   |
+|   |   * Dynamic CatalogService ({server}__{tool} Namespacing)      |   |
+|   |   * Bounded Agent Loop (5 Iterations, 30s Deadline, 64KB Cap)  |   |
+|   |   * Confirmation Engine (HMAC-SHA256 Token, 60s TTL)           |   |
+|   |   * Two-Phase Audit Interceptor (Duration, SHA-256 Args Hash)  |   |
+|   |                                                                |   |
+|   |   Persistent Volume: /data/gateway.db                          |   |
+|   |   (Node.js 24 node:sqlite in WAL mode on 500 MiB PVC)          |   |
+|   +---------------+----------------------------+-------------------+   |
+|                   | ClusterIP (:3000)          | ClusterIP (:3000)     |
+|                   v                            v                       |
+|   +-------------------------------+    +---------------------------+   |
+|   | urumi-woocommerce-mcp (:3000) |    | CRM & Tasks MCP (:3000)   |   |
+|   | * Custom TypeScript Server    |    | * urumi-mcp-crm (2 tools) |   |
+|   | * 5 Approved Store Tools      |    | * urumi-mcp-tasks (3 tool)|   |
+|   | * readOnlyRootFilesystem      |    | * No ServiceAccount token |   |
+|   +---------------+---------------+    +---------------------------+   |
+|                   | OAuth 1.0a HMAC-SHA256 (:80)                       |
+|                   v                                                    |
+|   +-------------------------------+                                    |
+|   | urumi-wordpress Pod (:80)     |  NetworkPolicy Isolation:          |
+|   | + MariaDB StatefulSet (:3306) |  Gateway cannot connect directly   |
+|   | (Stateful PVCs: 1GiB + 1GiB)  |  to WordPress (80) or MariaDB(3306)|
+|   +-------------------------------+                                    |
++------------------------------------------------------------------------+
 ```
 
-For complete architecture diagrams, data models, and decision logs, see [`docs/architecture.md`](docs/architecture.md) and [`docs/decisions/`](docs/decisions/).
+For complete architectural specifications, storage models, and design decisions, see [docs/architecture.md](docs/architecture.md) and [docs/decisions/](docs/decisions/).
 
 ---
 
-## 📦 Monorepo Structure
+## Monorepo Structure
 
-The project is structured as an npm monorepo with pinned **Node.js 24 LTS (`v24.20.0`)** and strict TypeScript:
+The project is structured as an npm monorepo with pinned **Node.js 24 LTS (`v24.20.0`)** and strict TypeScript configuration:
 
 ```
 urumi-platform/
@@ -134,11 +122,12 @@ urumi-platform/
 │           └── templates/         # Deployments, StatefulSet, Services, Ingress, NetworkPolicies
 ├── docs/                     # Comprehensive architecture, ADRs, test plans, and phase reports
 │   ├── architecture.md       # Detailed 4-layer system design and storage models
-│   ├── requirements-traceability.md # Granular requirements traceability matrix (Categories A–H)
-│   ├── decisions/            # 21 Architecture Decision Records (ADRs 001–021)
+│   ├── system-design-and-tradeoffs.md # Deliverable note on architecture, routing & production
+│   ├── threat-model.md       # Deliverable note on credentials, untrusted upstreams & IDOR
+│   ├── requirements-traceability.md # Requirements traceability matrix (Categories A-H)
+│   ├── decisions/            # 21 Architecture Decision Records (ADRs 001-021)
 │   ├── phase-6/              # Phase 6 AI agent and external MCP acceptance reports
-│   ├── phase-7/              # Phase 7 hardening, recovery, and regression reports
-│   └── phase-8/              # Final demo scripts, cue sheets, drawing guides, and interview prep
+│   └── phase-7/              # Phase 7 hardening, recovery, and regression reports
 ├── scripts/                  # Automated store provisioning and verification scripts
 ├── package.json              # npm workspaces root
 └── tsconfig.base.json        # Base TypeScript compiler configuration
@@ -146,7 +135,7 @@ urumi-platform/
 
 ---
 
-## 🚀 Local Setup Instructions (k3d / K3s)
+## Local Setup Instructions (k3d / K3s)
 
 ### 1. Prerequisites
 Ensure the following tools are installed on your host system:
@@ -216,7 +205,7 @@ kubectl --context k3d-urumi -n urumi rollout status deployment/urumi-gateway
 ```
 
 ### 6. Bootstrap the Store
-Initialize WooCommerce permalinks, currency (INR `₹`), COD gateway, Flat Rate shipping, initial products, and internal API credentials:
+Initialize WooCommerce permalinks, currency (INR), COD gateway, Flat Rate shipping, initial products, and internal API credentials:
 ```bash
 ./scripts/bootstrap-store.sh
 ```
@@ -230,19 +219,19 @@ npm --prefix apps/gateway run bootstrap:admin
 
 ---
 
-## 🌐 Production / VPS Deployment Guide (K3s)
+## Production / VPS Deployment Guide (K3s)
 
-The platform is designed for zero-drift transition to a production-like VPS running K3s using the **exact same Helm templates**, modified solely via [`infra/helm/urumi-platform/values-prod.yaml`](infra/helm/urumi-platform/values-prod.yaml).
+The platform is designed for zero-drift transition to a production-like VPS running K3s using the **exact same Helm templates**, modified solely via [infra/helm/urumi-platform/values-prod.yaml](infra/helm/urumi-platform/values-prod.yaml).
 
-### 1. What Changes in Production (`values-prod.yaml`)
-| Configuration Domain | Local (`values-local.yaml`) | Production (`values-prod.yaml`) |
-|:---|:---|:---|
-| **Domains / DNS** | `*.127.0.0.1.nip.io` | Real registered domains (e.g. `shop.example.com`, `mcp.example.com`) |
-| **Ingress & Ports** | Host Port 8080 (HTTP) | Standard Ports 80 & 443 (HTTP $\rightarrow$ HTTPS redirect) |
-| **TLS Certificates** | Disabled (`tls.enabled: false`) | Enabled via Let's Encrypt / cert-manager ClusterIssuer |
-| **Storage Class** | `local-path` | `local-path` (single node) or cloud provisioner (`gp3`, `standard-rwo`) |
-| **Security Context** | Developer testing rules enabled | Strict read-only root filesystems, non-root execution, zero test pods |
-| **NetworkPolicies** | Allows local test-client probe pods | Strips all test-client ingress rules; enforces strict pod-label matching |
+### 1. Configuration Differences Between Environments
+| Configuration Domain | Local (`values-local.yaml`) | Production (`values-prod.yaml`) | Architectural Impact |
+|:---|:---|:---|:---|
+| **Domains / DNS** | `*.127.0.0.1.nip.io` | Static public domains (`shop.example.com`, `mcp.example.com`) | External clients connect to verified hostnames without local DNS hacks. |
+| **Ingress & Ports** | Host Port 8080 (HTTP) | Standard Ports 80 & 443 (HTTP to HTTPS redirect) | Full TLS termination; plain HTTP traffic is redirected automatically. |
+| **TLS Certificates** | Disabled (`tls.enabled: false`) | Enabled via Let's Encrypt / cert-manager ClusterIssuer | Automated certificate provisioning and 90-day renewal cycle. |
+| **Storage Class** | `local-path` | `local-path` (single node) or cloud CSI (`gp3`, `standard-rwo`) | Durable block storage backing SQLite, MariaDB, and WordPress uploads. |
+| **Security Context** | Developer testing rules | Strict read-only root filesystems, non-root execution, zero test pods | Eliminates container persistence vectors post-exploitation. |
+| **NetworkPolicies** | Allows local test-client probe pods | Strips all test-client ingress rules; enforces strict pod-label matching | Complete microsegmentation; only the gateway can reach upstream MCP pods. |
 
 ### 2. Deploy to a VPS running K3s
 On a standard Debian/Ubuntu VPS with K3s and cert-manager installed:
@@ -276,7 +265,7 @@ kubectl get certificates -n urumi
 
 ---
 
-## 🛠 User & Verification Workflows
+## User & Verification Workflows
 
 ### 1. Storefront Checkout (Cash on Delivery)
 1. Open the storefront in your browser: [http://shop.127.0.0.1.nip.io:8080/](http://shop.127.0.0.1.nip.io:8080/)
@@ -294,7 +283,7 @@ kubectl get certificates -n urumi
 4. **Natural-Language Read-Only Query**:
    - Ask: *"What products are currently available in our WooCommerce store? Please list their names, prices, and stock status."*
    - Observe real-time execution feedback:
-     - Tool execution badge: `woocommerce__list_products` (green `success` pill with duration in ms).
+     - Tool execution badge: `woocommerce__list_products` (green success pill with duration in ms).
      - Expand the badge to inspect canonical arguments (`per_page: 10`) and clean JSON results.
      - Synthesized response summarizes the three store items.
 5. **State Mutation with Server-Side Confirmation**:
@@ -311,7 +300,7 @@ kubectl get certificates -n urumi
 
 ---
 
-### 3. External MCP Client & Instant Revocation
+### 3. External MCP Client & Instant Key Revocation
 1. Navigate to the **Team API Keys** tab in the Dashboard.
 2. Click **Generate New Key**, enter name `demo-evaluator-key`, and copy the raw key (`urumi_live_...`).
 3. **Connect via Streamable HTTP (Terminal / Inspector)**:
@@ -350,7 +339,9 @@ kubectl get certificates -n urumi
 
 ---
 
-## 📐 System Design & Trade-Offs Note
+## System Design & Trade-Offs Note
+
+The deliverable note on system design and engineering trade-offs is maintained at [docs/system-design-and-tradeoffs.md](docs/system-design-and-tradeoffs.md). Key architectural highlights include:
 
 ### 1. Architecture Choices
 - **Node.js 24 LTS & Embedded SQLite WAL Mode ([ADR-012](docs/decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md)):**  
@@ -371,13 +362,15 @@ kubectl get certificates -n urumi
 
 ### 3. Production Changes (Local vs VPS)
 - **DNS**: `127.0.0.1.nip.io` wildcard DNS is replaced with static A/AAAA records pointing to the VPS public IP.
-- **Ingress & TLS**: Traefik ingress enables cert-manager Let's Encrypt production certificates on port 443 with automatic HTTP $\rightarrow$ HTTPS redirection.
+- **Ingress & TLS**: Traefik ingress enables cert-manager Let's Encrypt production certificates on port 443 with automatic HTTP to HTTPS redirection.
 - **Storage Class**: `local-path` is replaced with cloud persistent block storage (e.g. `gp3`, `standard-rwo`) if deploying to managed cloud Kubernetes.
 - **Secrets**: Plaintext `.env` files are prohibited; credentials are provided via sealed secrets, external secret operators (Vault / AWS Secrets Manager), or CI/CD injection.
 
 ---
 
-## 🛡 Threat Model Note
+## Threat Model Note
+
+The deliverable note on threat modeling and platform security posture is maintained at [docs/threat-model.md](docs/threat-model.md). Key threat vectors and mitigations include:
 
 ### 1. Shared Upstream Credentials
 - **Risk**: Upstream credentials (e.g. WordPress consumer keys, bearer tokens) are shared across the team.
@@ -393,7 +386,7 @@ kubectl get certificates -n urumi
   1. The gateway bounds all tool outputs to a maximum of **64 KiB**, truncating oversized payloads.
   2. Tool results are enclosed in structured markdown code fences with a strict security notice instructing the model never to interpret tool output as system instructions.
   3. All state mutations require an explicit cryptographic confirmation token (HMAC-SHA256, 60s TTL) signed by the server, preventing autonomous unauthorized changes.
-  4. Baseline records (Order #14 and Product IDs 10–12) are hard-blocked at the engine level.
+  4. Baseline records (Order #14 and Product IDs 10-12) are hard-blocked at the engine level.
 
 ### 4. What One Team Member Can Do to Another
 - **Risk**: A malicious or compromised member account attempting to access other users' audit logs, impersonate members, or manipulate upstreams (IDOR / privilege escalation).
@@ -404,22 +397,25 @@ kubectl get certificates -n urumi
 
 ---
 
-## 🌟 Stand-Out Differentiators Implemented
+## Stand-Out Items and Bonus Architecture Summary
 
-| # | Differentiator | Implementation & Evidence Reference |
-|:---:|:---|:---|
-| **1** | **Production-Like VPS Parity** | Pinned K3s engine, unified Helm chart, zero-drift values separation (`values-local.yaml` vs `values-prod.yaml`), Let's Encrypt TLS annotations. ([ADR-001](docs/decisions/ADR-001-stack-and-deployment.md)) |
-| **2** | **Dual-Listener Perimeter Isolation** | Physical separation of Browser Listener (Port 3001) and MCP Protocol Listener (Port 3000). Private Admin API (`/admin/v1/*`) completely hidden from public Ingress (returns 404). ([ADR-020](docs/decisions/ADR-020-dual-listener-and-ingress-perimeter.md)) |
-| **3** | **Runtime Container Hardening** | `readOnlyRootFilesystem: true` on WooCommerce MCP with writable `/tmp` `emptyDir`; `automountServiceAccountToken: false` on CRM and Tasks MCP; non-root user execution. ([Gate P7-G2 Report](docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md)) |
-| **4** | **In-Cluster OAuth 1.0a HMAC-SHA256** | Custom RFC 5849 OAuth 1.0a signer for WooCommerce REST API. Consumer secrets are never sent over the wire. Zero third-party npm wrappers. ([ADR-007](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md)) |
-| **5** | **Two-Phase Cryptographic Audit Logging** | Start and completion lifecycle logging with exact millisecond duration and deterministic SHA-256 argument fingerprints. Zero plaintext customer PII or credentials persisted. ([ADR-014](docs/decisions/ADR-014-two-phase-audit-logging-and-retention.md)) |
-| **6** | **Server-Side Mutation Confirmation Engine** | HMAC-SHA256 signed confirmation tokens with 60s TTL and single-use nonce for state mutations. Hard-blocked immutable protection for Order #14 and Product IDs 10–12. Approved disposable demo fixture exemption. ([ADR-021](docs/decisions/ADR-021-in-dashboard-chat-agent-and-mutation-confirmation.md)) |
-| **7** | **Strict NetworkPolicy Defense-in-Depth** | K3s `kube-router` default-deny egress policies blocking gateway access to WordPress (80) and MariaDB (3306). Workload ingress restricted to authorized component labels. ([Gate P7-G4 Report](docs/phase-7/p7-g4-networkpolicy-boundary-verification-report.md)) |
-| **8** | **Single-Replica Recovery Verification** | Graceful pod deletion recovers to `1/1 Ready` in 31 seconds. SQLite WAL database verified with `PRAGMA integrity_check` returning `ok`, 0 foreign key violations, and 0 data drift. ([Gate P7-G3 Report](docs/phase-7/p7-g3-pod-replacement-recovery-report.md)) |
+The assignment brief outlines optional bonus areas and ways to stand out. Below is a detailed ledger of the stand-out features implemented, their codebase locations, and the architectural decisions made:
+
+| # | Stand-Out / Bonus Item | Status | Primary Codebase Location | Architectural Rationale & Implementation Detail |
+|:---:|:---|:---:|:---|:---|
+| **1** | **Production-Like VPS Deployment (k3s)** | **Implemented** | `infra/helm/urumi-platform/values-prod.yaml`<br>`infra/helm/urumi-platform/Chart.yaml`<br>[ADR-001](docs/decisions/ADR-001-stack-and-deployment.md) | Single unified Helm chart with zero-drift template separation. Configures cert-manager Let's Encrypt production ClusterIssuer, public DNS hostnames, production PersistentVolume storage classes, HTTP-to-HTTPS redirect, and exclusion of testing pods. |
+| **2** | **Tool Permissions & Dual-Listener Perimeter Isolation** | **Implemented** | `apps/gateway/src/index.ts`<br>`apps/gateway/src/admin/admin-service.ts`<br>`apps/gateway/src/auth/`<br>[ADR-020](docs/decisions/ADR-020-dual-listener-and-ingress-perimeter.md) | Physical port separation between Browser Session Plane (port 3001) and Machine MCP Plane (port 3000). Private administrative routes (`/admin/v1/*`) are unreachable via Ingress (returns 404). Role separation enforces that members can only invoke tools and manage personal keys; administrative server registration is strictly guarded. |
+| **3** | **Server-Side Mutation Confirmation Engine** | **Implemented** | `apps/gateway/src/chat/confirmation.ts`<br>`apps/dashboard/src/components/chat/ConfirmationCard.tsx`<br>[ADR-021](docs/decisions/ADR-021-in-dashboard-chat-agent-and-mutation-confirmation.md) | Halts autonomous model hallucinations on state-changing tools (`create_product`, `update_order_status`, `create_task`). Mints an HMAC-SHA256 signed token with a 60-second TTL and cryptographic nonce. Requires explicit human confirmation in the dashboard chat UI before committing. Protects baseline records (Order #14, Products 10-12). |
+| **4** | **In-Cluster RFC 5849 OAuth 1.0a HMAC-SHA256 Signer** | **Implemented** | `apps/woocommerce-mcp/src/client/oauth-signer.ts`<br>[ADR-007](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md) | Custom, zero-dependency TypeScript implementation of RFC 5849 OAuth 1.0a HMAC-SHA256. Prevents transmitting WordPress REST consumer secrets in plaintext over the cluster network, generating unique timestamps and nonces per request. |
+| **5** | **Security Hardening (SSRF, RBAC, NetworkPolicies, Read-Only Rootfs)** | **Implemented** | `apps/gateway/src/admin/admin-service.ts`<br>`infra/helm/urumi-platform/templates/gateway-rbac.yaml`<br>`infra/helm/urumi-platform/templates/networkpolicy.yaml`<br>`infra/helm/urumi-platform/templates/mcp-deployment.yaml`<br>[ADR-017](docs/decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md) | Multi-layered defense-in-depth: SSRF IP allowlist blocks internal subnets (RFC 1918) and cloud metadata (169.254.169.254); Gateway ServiceAccount bounded strictly to `urumi-gateway-secrets` namespace; Default-deny egress NetworkPolicies prevent direct gateway connections to MariaDB and WordPress; `readOnlyRootFilesystem: true` on WooCommerce MCP; non-root UID 10001; Linux capabilities dropped. |
+| **6** | **Scaling, Concurrency Control & Resilience** | **Implemented** | `apps/gateway/src/upstream/concurrency-limiter.ts`<br>`apps/gateway/src/upstream/circuit-breaker.ts`<br>[ADR-015](docs/decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md) | Hierarchical concurrency limiter (global 20 / upstream 4) with 1,000ms queue wait time and HTTP 429 backpressure. Per-upstream circuit breakers trip to OPEN after 3 consecutive failures or 10s timeouts, failing fast for 30s to prevent cluster-wide thread starvation. |
+| **7** | **Two-Phase Cryptographic Audit Logging & Observability** | **Implemented** | `apps/gateway/src/audit/audit-service.ts`<br>[ADR-014](docs/decisions/ADR-014-two-phase-audit-logging-and-retention.md) | Two-phase audit logging writes an initial state (`started`) with SHA-256 argument hash, followed by a terminal state (`completed` / `failed`) with exact millisecond duration, HTTP status, and error payload. Zero plaintext customer PII or credentials persisted. Real-time audit log viewable in React dashboard. |
+| **8** | **Single-Replica State Recovery & Rollback** | **Implemented** | `infra/helm/urumi-platform/templates/gateway-deployment.yaml`<br>[Gate P7-G3 Report](docs/phase-7/p7-g3-pod-replacement-recovery-report.md) | Evaluated and verified single-replica pod replacement recovery in 31 seconds. SQLite database mounted on persistent storage (`/data/gateway.db`) survives crashes with zero data loss (`PRAGMA integrity_check` returns `ok`). Safe Helm upgrade and atomic rollback commands documented. |
+| **9** | **Bonus: Multi-Store Provisioning Architecture** | **Architected & Documented** | [docs/system-design-and-tradeoffs.md](docs/system-design-and-tradeoffs.md#3-roadmap-multi-store-provisioning-architecture) | In strict adherence to the assignment guidance (*"A working core is worth more than an unfinished bonus"*), we prioritized rock-solid, production-grade core reliability (534/534 tests, deep security, zero flakiness). We fully architected the Kubernetes-native multi-store provisioning design (Kubernetes Operator pattern, dynamic namespace lifecycle, per-store WooCommerce MCP pods, namespace-scoped NetworkPolicies, dynamic catalog sync). |
 
 ---
 
-## 🧪 Automated Testing & Verification Baseline
+## Automated Testing & Verification Baseline
 
 The repository enforces a comprehensive test suite across unit, protocol, and integration layers using Node 24's native `node:test` runner:
 
@@ -456,27 +452,40 @@ helm lint infra/helm/urumi-platform -f infra/helm/urumi-platform/values-prod.yam
 
 ---
 
-## 📚 Phase Documentation Index
+## Technical Documentation Index
 
-- **Phase 8 (Final Demonstration & Evaluation Package)**:
-  - [**demo-video-master-script.md**](docs/phase-8/demo-video-master-script.md): Full word-for-word spoken script with exact screen cues across all 12 sections.
-  - [**demo-architecture-drawing-guide.md**](docs/phase-8/demo-architecture-drawing-guide.md): 13-step draw.io live drawing sequence, Mermaid blueprints, and request traces.
-  - [**demo-video-recording-cue-sheet.md**](docs/phase-8/demo-video-recording-cue-sheet.md): Compact presenter cheat sheet mapping time codes, actions, and evidence.
-  - [**demo-video-preflight-checklist.md**](docs/phase-8/demo-video-preflight-checklist.md): 15-point verification checklist and rapid recovery runbooks.
-  - [**demo-interview-preparation.md**](docs/phase-8/demo-interview-preparation.md): 22 deep-dive technical interview questions and answers for Round 2.
-- **Phase 7 (Hardening, Resilience & Qualification)**:
-  - [**p7-g2-deployment-and-runtime-verification-report.md**](docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md): Read-only rootfs, `/tmp` emptyDir, and token isolation.
-  - [**p7-g3-pod-replacement-recovery-report.md**](docs/phase-7/p7-g3-pod-replacement-recovery-report.md): Single-replica pod replacement recovery and SQLite persistence verification.
-  - [**p7-g4-networkpolicy-boundary-verification-report.md**](docs/phase-7/p7-g4-networkpolicy-boundary-verification-report.md): Empirical proof of allowed and denied network paths.
-  - [**p7-g5-regression-qualification-report.md**](docs/phase-7/p7-g5-regression-qualification-report.md): 534/534 automated regression qualification.
-  - [**p7-g6-final-acceptance-and-handoff-report.md**](docs/phase-7/p7-g6-final-acceptance-and-handoff-report.md): Phase 7 formal handoff and acceptance matrix.
-- **Phase 6 (AI Agent Loop & External MCP Client)**:
-  - [**p6-demo-runbook.md**](docs/phase-6/p6-demo-runbook.md): Repeatable 10-step evaluator demonstration protocol.
-  - [**p6-g4-external-mcp-acceptance-report.md**](docs/phase-6/p6-g4-external-mcp-acceptance-report.md): Official MCP client acceptance and cross-server workflow.
-  - [**p6-operational-and-user-guide.md**](docs/phase-6/p6-operational-and-user-guide.md): Comprehensive platform operations guide.
-- **Historical Technical Context & Development Manuals**:
-  - [**GLOBAL_README.md**](GLOBAL_README.md): Historical monorepo development milestone ledger (Phases 1–6).
-  - [**documentation/phase 5/Project Study Material.md**](documentation/phase%205/Project%20Study%20Material.md): Deep-dive educational textbook explaining Scrypt, CSRF, and dual listeners.
+### Core Architecture & System Notes
+- [docs/architecture.md](docs/architecture.md): Complete 4-layer system design, component responsibilities, and storage models.
+- [docs/system-design-and-tradeoffs.md](docs/system-design-and-tradeoffs.md): Deliverable note on architectural choices, routing, failure handling, and production differences.
+- [docs/threat-model.md](docs/threat-model.md): Deliverable note on shared credentials, token termination, untrusted upstreams, and IDOR defense.
+- [docs/requirements-traceability.md](docs/requirements-traceability.md): Requirements traceability matrix mapping Categories A through H.
+
+### Architecture Decision Records (ADRs)
+- [ADR-001: Stack and Deployment Architecture](docs/decisions/ADR-001-stack-and-deployment.md)
+- [ADR-007: In-Cluster REST API Authentication](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md)
+- [ADR-012: Gateway Persistence (Node.js 24 node:sqlite in WAL Mode)](docs/decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md)
+- [ADR-014: Two-Phase Cryptographic Audit Logging](docs/decisions/ADR-014-two-phase-audit-logging-and-retention.md)
+- [ADR-015: Concurrency Limits, Circuit Breakers, and Resilience](docs/decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md)
+- [ADR-016: Upstream Catalog Snapshot and Health Tracking](docs/decisions/ADR-016-upstream-catalog-snapshot-and-health-tracking.md)
+- [ADR-017: Network Defense (SSRF Allowlist and Secret RBAC)](docs/decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md)
+- [ADR-020: Dual-Listener Architecture and Ingress Perimeter Isolation](docs/decisions/ADR-020-dual-listener-and-ingress-perimeter.md)
+- [ADR-021: In-Dashboard Chat Agent and Mutation Confirmation Engine](docs/decisions/ADR-021-in-dashboard-chat-agent-and-mutation-confirmation.md)
+
+### Phase 7 Hardening & Qualification Reports
+- [docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md](docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md): Read-only rootfs, `/tmp` emptyDir, and token isolation verification.
+- [docs/phase-7/p7-g3-pod-replacement-recovery-report.md](docs/phase-7/p7-g3-pod-replacement-recovery-report.md): Single-replica pod replacement recovery in 31s and SQLite persistence check.
+- [docs/phase-7/p7-g4-networkpolicy-boundary-verification-report.md](docs/phase-7/p7-g4-networkpolicy-boundary-verification-report.md): Empirical proof of allowed and denied network paths.
+- [docs/phase-7/p7-g5-regression-qualification-report.md](docs/phase-7/p7-g5-regression-qualification-report.md): 534/534 automated regression qualification.
+- [docs/phase-7/p7-g6-final-acceptance-and-handoff-report.md](docs/phase-7/p7-g6-final-acceptance-and-handoff-report.md): Phase 7 formal handoff and acceptance matrix.
+
+### Phase 6 AI Agent & MCP Protocol Reports
+- [docs/phase-6/p6-demo-runbook.md](docs/phase-6/p6-demo-runbook.md): Repeatable 10-step evaluator demonstration protocol.
+- [docs/phase-6/p6-g4-external-mcp-acceptance-report.md](docs/phase-6/p6-g4-external-mcp-acceptance-report.md): Official MCP client acceptance and cross-server workflow.
+- [docs/phase-6/p6-operational-and-user-guide.md](docs/phase-6/p6-operational-and-user-guide.md): Comprehensive platform operations guide.
+
+### Historical Context & Educational Manuals
+- [GLOBAL_README.md](GLOBAL_README.md): Historical monorepo development milestone ledger (Phases 1-6).
+- [documentation/phase 5/Project Study Material.md](documentation/phase%205/Project%20Study%20Material.md): Deep-dive educational textbook explaining Scrypt, CSRF, and dual listeners.
 
 ---
 
