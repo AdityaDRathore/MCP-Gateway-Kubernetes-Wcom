@@ -1,211 +1,174 @@
-# Urumi Platform — Team MCP Gateway on Kubernetes with WooCommerce
+# Urumi Enterprise Platform — Team MCP Gateway on Kubernetes with WooCommerce
 
-A unified, authenticated, and audited Model Context Protocol (MCP) gateway deployed on Kubernetes, providing multi-tenant AI tool access to a stateful WooCommerce store and internal team microservices.
+[![Node.js 24 LTS](https://img.shields.io/badge/Node.js-24%20LTS%20(v24.20.0)-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.37.1%20(k3d%2Fk3s)-326CE5?logo=kubernetes&logoColor=white)](https://k3s.io/)
+[![Helm 3](https://img.shields.io/badge/Helm-v3.17.1-0F1689?logo=helm&logoColor=white)](https://helm.sh/)
+[![MCP SDK](https://img.shields.io/badge/MCP%20SDK-v1.32.1%20(Streamable%20HTTP)-blueviolet)](https://modelcontextprotocol.io/)
+[![Tests](https://img.shields.io/badge/Tests-534%2F534%20Passed%20(100%25)-brightgreen)](docs/phase-7/p7-g5-regression-qualification-report.md)
+[![Security Hardened](https://img.shields.io/badge/Container%20Security-Read--Only%20Rootfs%20%7C%20Non--Root-orange)](docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md)
 
-Built for the **Urumi AI Founding DevOps / Forward Deployed Engineer (FDE) Assignment**.
+A unified, authenticated, and audited **Model Context Protocol (MCP) Gateway** deployed on Kubernetes. It provides governed, multi-tenant AI tool access to a stateful WooCommerce store and internal team microservices across two decoupled perimeters: an **in-dashboard AI assistant** for human operators and a **Streamable HTTP endpoint** for external AI clients (Claude Code, Cursor, MCP Inspector).
 
----
-
-## Architecture At A Glance
-
-```
-Downstream Clients (User A Chat / User B MCP Inspector)
-                        │
-                        ▼ Ingress (:8080)
-┌─────────────────────────────────────────────────────────────────┐
-│ Kubernetes Cluster (k3d / K3s)                                  │
-│                                                                 │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │ Team MCP Gateway & Control Plane                        │   │
-│   │ • React + Vite Admin Dashboard                          │   │
-│   │ • TypeScript Dual Proxy (Streamable HTTP)               │   │
-│   │ • User API Key Auth (SHA-256) & Instant Revocation      │   │
-│   │ • Namespacing & Upstream Failure Isolation              │   │
-│   │ • Persistent Audit Logging (SQLite on PVC)              │   │
-│   └───────────────┬─────────────────────────┬───────────────┘   │
-│                   │ ClusterIP               │ ClusterIP         │
-│                   ▼                         ▼                   │
-│   ┌─────────────────────────────┐   ┌───────────────────────┐   │
-│   │ WooCommerce MCP Server      │   │ CRM & Tasks MCP       │   │
-│   │ (Custom TypeScript / HTTP)  │   │ (Internal Mock MCPs)  │   │
-│   └──────────────┬──────────────┘   └───────────────────────┘   │
-│                  │ REST API                                     │
-│                  ▼                                              │
-│   ┌─────────────────────────────┐                               │
-│   │ WordPress + WooCommerce Pod │                               │
-│   │ + MariaDB Pod (Stateful PVC)│                               │
-│   └─────────────────────────────┘                               │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-For full system architecture, network boundaries, and resource budgeting, see [`docs/architecture.md`](docs/architecture.md).
+Submitted by **Aditya Rathore** for Round 1 of the **Urumi AI Founding DevOps / Forward Deployed Engineer (FDE) Assignment**.
 
 ---
 
-## Current Status: Phase 6 Complete (In-Dashboard AI Assistant, Model Provider Abstraction, Mutation Confirmation & External MCP Interoperability)
+## Quick Navigation
 
-- **Phase 1 (Foundation & Scaffolding)**:
-  - **Node.js LTS**: Pinned to **Node.js 24 LTS (`v24.20.0`)** via `.nvmrc` and `engines`.
-  - **MCP Wire Protocol**: Pinned to official `@modelcontextprotocol/sdk@1.32.1` using **Streamable HTTP** (wire revision `2024-11-05`). Verified via automated 4/4 test suite in `spikes/mcp-echo/`.
-  - **Toolchain**: `kubectl v1.37.1`, `helm v3.17.1`, `k3d v5.8.3`.
-  - **Packaging**: Monorepo with root npm workspace and unified Helm chart (`infra/helm/urumi-platform`).
-- **Phase 2 (Stateful Store Workload)**:
-  - **Cluster**: Local k3d cluster `urumi` pinned to `rancher/k3s:v1.37.1-k3s1` (0 minor version skew with client `v1.37.1`).
-  - **Container Images**: Pinned to `wordpress:7.1.3-php8.3-apache` and `mariadb:11.4.5` (digests locked in [`docs/phase-2/image-lock.md`](docs/phase-2/image-lock.md)).
-  - **Stateful Storage**: MariaDB StatefulSet (`/var/lib/mysql`) and WordPress Deployment (`/var/www/html`) bound to `local-path` PersistentVolumes. Survives pod restarts with zero data loss.
-  - **WooCommerce Storefront**: Active at `http://shop.127.0.0.1.nip.io:8080` with WooCommerce 11.2.1, INR (`₹`), COD, seeded with 3 products (Mug, Mouse, Notebook) and verified Order #14 (`processing`, INR 299.00).
-- **Phase 3 (Custom WooCommerce MCP Server on Kubernetes)**:
-  - **Stateless MCP Server**: Written from scratch in TypeScript (`apps/woocommerce-mcp`) using `@modelcontextprotocol/sdk@1.32.1` over **Streamable HTTP** (`POST /mcp`).
-  - **Five Approved Tools**: Strictly exposes `list_products`, `create_product`, `list_orders`, `get_order`, and `update_order_status`. Zero debug or mock tools.
-  - **In-Cluster Cryptographic Auth**: Uses RFC 5849 OAuth 1.0a HMAC-SHA256 for internal pod-to-pod communication (`urumi-wordpress:80`). Consumer secret is never sent over the wire ([ADR-007](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md)).
-  - **Private ClusterIP & NetworkPolicy**: Deployed as `urumi-woocommerce-mcp:3000` with zero public Ingress. Isolated via K3s `kube-router` NetworkPolicy packet filtering.
-  - **Comprehensive Regression Suite**: 120/120 automated tests pass (46 unit, 35 protocol, 39 live integration), plus in-cluster verifier pod execution.
-- **Phase 4 (Team MCP Gateway Core, Dynamic Federation & Security Hardening)**:
-  - **Central Team MCP Gateway**: Implemented in TypeScript (`apps/gateway`) providing a unified downstream MCP entrypoint (`POST /mcp`) over Traefik Ingress on `dashboard.127.0.0.1.nip.io:8080/mcp`.
-  - **Dynamic Tool Federation & Namespacing**: Dynamic discovery and aggregation across 3 upstream microservices (`woocommerce-mcp`, `mcp-crm`, `mcp-tasks`) with automated namespacing (`crm__*`, `tasks__*`, `woocommerce__*`). Exposes 10 active tools.
-  - **Native Embedded Persistence**: Node.js 24 core `node:sqlite` in WAL mode on dedicated PVC (`urumi-gateway-pvc`, 500Mi) with non-locking online `VACUUM INTO` backup capability.
-  - **Constant-Time Authentication & RBAC**: API keys hashed with SHA-256 and verified using `crypto.timingSafeEqual`. Enforces member vs admin role separation. Private Admin REST API (`/admin/v1/upstreams`) strictly hidden from public Ingress.
-  - **Two-Phase Cryptographic Audit Logging**: Request ingress and egress logged with deterministic SHA-256 argument hashes (`args_hash`), guaranteeing zero cleartext credential or PII leakage.
-  - **Resilience & Concurrency Control**: Global concurrency ceiling (20) with HTTP 429 backpressure, per-upstream FIFO queues (4 active, 10 queued), and 10,000ms fail-closed `AbortController` timeouts.
-  - **Kubernetes Security Boundaries**: Upstream credentials isolated in `urumi-gateway-secrets` with strict SA RBAC scoping. Default-deny egress NetworkPolicies blocking direct access to WordPress (port 80) and MariaDB (port 3306). Hardened local-path storage with `DAC_OVERRIDE` capability for repeatable pod recreations.
-- **Phase 5 (Team Platform, Browser Dashboard & Dual-Listener Architecture)**:
-  - **React 19 + Vite 6 Dashboard**: Lightweight, responsive SPA built in TypeScript and Vanilla CSS (`apps/dashboard`), packaged inside the gateway multi-stage Docker build and served statically from `/app/dist-dashboard`.
-  - **Dual-Listener Ingress Perimeter**: Gateway process binds two distinct HTTP ports:
-    - **Port 3000**: Internal `/admin/v1/*` API and Downstream Streamable HTTP MCP endpoint (`/mcp`), mapped by Traefik Ingress exclusively for path `/mcp`.
-    - **Port 3001**: Browser SPA static assets and session-authenticated Browser API (`/api/v1/browser/*`), mapped by Ingress for root path `/`. External requests to `/admin/v1/*` hit Port 3001 and return HTTP 404.
-  - **Decoupled Authentication Architecture**: Complete physical and cryptographic separation between human browser sessions and MCP client tokens:
-    - **Browser Human Identity**: Authenticates with username and password verified via Scrypt KDF (`N=16384, r=8, p=1`). Sessions use opaque 256-bit tokens hashed with SHA-256 in SQLite `browser_sessions`. Session cookies are `HttpOnly`, `SameSite=Lax`, path-scoped `/`, and `Secure` in TLS environments.
-    - **Dual CSRF Protection**: All state-changing browser mutations (`POST`, `PATCH`, `DELETE`) require both an `X-Urumi-CSRF` header and a trusted Origin header matching allowed ingress hosts.
-    - **Downstream MCP Clients**: Continue using constant-time verified Bearer API keys (`Authorization: Bearer urumi_live_<hex>`). Session cookies are strictly rejected on `/mcp`; Bearer tokens are rejected on `/api/v1/browser`.
-  - **Team Onboarding & API Key Lifecycle**:
-    - **Admin Bootstrap CLI**: Operator CLI (`npm --prefix apps/gateway run cli:bootstrap-admin`) provisions the initial admin account and temporary enrollment token idempotently.
-    - **Member Invitations**: Admins generate single-use 72-hour invitation tokens. Prospective members redeem tokens via browser UI to register username and Scrypt password verifier.
-    - **API Key Self-Service**: Members and admins generate scoped API keys. Raw plaintext key is returned exactly once; only SHA-256 hashes are persisted. Immediate revocation invalidates key on the very next MCP request.
-  - **Audit Trail Viewer**: Paginated, filterable audit log reader (`/api/v1/browser/audit`) restricted to Admin role, with sanitized error messages and deterministic argument hashes.
-  - **Empirical Deployment & Acceptance**: Deployed to `k3d-urumi` under Helm release `urumi-store` (Revision 10) with image `urumi-gateway:1.0.0` (`sha256:4cc76d09366b0d458ce59da1799dcfacfb063d2ba0409b21ee97b1111c05ef2b`). 28 of 28 live runtime acceptance tests pass; zero drift on protected WooCommerce records (Products 10, 11, 12 and Order #14).
-- **Phase 6 (In-Dashboard AI Assistant, Model Provider Abstraction, Mutation Confirmation & External MCP Interoperability)**:
-  - **In-Dashboard AI Assistant**: Mounted as the "AI Assistant" tab in the React 19 dashboard (`ChatTab.tsx`), supporting conversational turns, real-time tool badges with millisecond durations, expandable argument/result inspection, and interactive mutation confirmation cards with ephemeral React state.
-  - **Model Provider Abstraction Layer**: Centralized `ModelProvider` interface (`apps/gateway/src/chat/types.ts`) supporting official Google GenAI Gemini models (`GeminiProviderAdapter` with reasoning `thoughtSignature` preservation and tool schema normalization) and hermetic mock provider (`DeterministicMockProviderAdapter`) for zero-credential testing.
-  - **Bounded Agent Loop State Machine**: Enforces a strict 5-iteration cap per turn (`LOOP_ITERATION_LIMIT_EXCEEDED`), a 30-second end-to-end deadline (`PROVIDER_TIMEOUT`), sequential tool execution via `ToolRouter.dispatch()`, 64 KiB tool payload truncation, untrusted tool output markdown isolation, and dual secret/PII regex redaction.
-  - **Server-Side Mutation Confirmation Engine**: HMAC-SHA256 signed confirmation tokens (60s TTL, single-use nonce, canonical argument hashing, user session binding) protecting baseline WooCommerce records (**Order #14 and Product IDs 10, 11, 12**). Approved disposable demo fixture exemption for product creation with SKU matching `/^chat-demo-[a-z0-9_-]+$/`.
-  - **Permanent Audit Attribution**: In-dashboard chat tool executions derive caller identity directly from browser sessions, recording full audit attribution (`user_id`, tool name, duration, SHA-256 argument hash) in persistent SQLite storage.
-  - **External MCP Client Interoperability**: Downstream Streamable HTTP `/mcp` endpoint verified with official MCP SDK clients and Inspector. Demonstrates 10-tool multi-upstream discovery, read-only order inspection without PII, and multi-turn cross-server workflows (`crm__search_contacts` + `tasks__list_tasks`) driven by a single natural-language prompt.
-  - **Cross-Path Security Verification**: 28 automated protocol tests verify perimeter isolation (tokens non-substitutable), CSRF/Origin enforcement, RBAC, IDOR protection, inactive account fail-closed, secret isolation, and provider error status code mappings (503, 504, 429, 502). Zero regressions across 351 unit tests and 62 protocol tests.
-
+- [Demo Video & Walkthrough](#-demo-video--walkthrough)
+- [Architecture At A Glance](#-architecture-at-a-glance)
+- [Monorepo Structure](#-monorepo-structure)
+- [Local Setup Instructions (k3d / K3s)](#-local-setup-instructions-k3d--k3s)
+- [Production / VPS Deployment Guide](#-production--vps-deployment-guide-k3s)
+- [User & Verification Workflows](#-user--verification-workflows)
+  - [1. Storefront Checkout (Cash on Delivery)](#1-storefront-checkout-cash-on-delivery)
+  - [2. In-Dashboard AI Assistant & Confirmation Engine](#2-in-dashboard-ai-assistant--confirmation-engine)
+  - [3. External MCP Client & Instant Revocation](#3-external-mcp-client--instant-revocation)
+- [System Design & Trade-Offs Note](#-system-design--trade-offs-note)
+- [Threat Model Note](#-threat-model-note)
+- [Stand-Out Differentiators Implemented](#-stand-out-differentiators-implemented)
+- [Automated Testing & Verification Baseline](#-automated-testing--verification-baseline)
+- [Phase Documentation Index](#-phase-documentation-index)
 
 ---
 
-## Monorepo Layout
+## 🎥 Demo Video & Walkthrough
+
+The complete 16–18 minute end-to-end recorded walkthrough covers:
+1. **System Introduction & Thank-You** to Namit and Divyanshu.
+2. **Live Architecture Drawing in draw.io** detailing request flows, ports, and boundaries.
+3. **Repository Tour & Code Mapping** connecting architecture to TypeScript implementation.
+4. **Kubernetes Deployment & PVC Persistence** inspection in terminal.
+5. **Live Product Walkthrough**:
+   - Admin upstream registration & dynamic 10-tool discovery.
+   - In-dashboard AI Chat Copilot with real-time badges and server-side HMAC mutation confirmation.
+   - Hard-blocked protection of baseline records (Order #14 and Product IDs 10–12).
+   - External MCP Client connecting via Bearer API key over Streamable HTTP.
+   - Single-prompt cross-server multi-turn reasoning (`crm` + `tasks`).
+   - Instant fail-closed API key revocation.
+6. **534-Test Automated Regression Baseline & Operational Trade-Offs**.
+
+- **Demo Video Submission Link:** `[SUBMITTED_VIA_GOOGLE_FORM]` *(Loom / Drive link)*
+- **Demo Video Master Script:** [`docs/phase-8/demo-video-master-script.md`](docs/phase-8/demo-video-master-script.md)
+- **Live Architecture Drawing Guide:** [`docs/phase-8/demo-architecture-drawing-guide.md`](docs/phase-8/demo-architecture-drawing-guide.md)
+- **Screen-by-Screen Recording Cue Sheet:** [`docs/phase-8/demo-video-recording-cue-sheet.md`](docs/phase-8/demo-video-recording-cue-sheet.md)
+- **Round 2 Interview Preparation (22 Q&As):** [`docs/phase-8/demo-interview-preparation.md`](docs/phase-8/demo-interview-preparation.md)
+
+---
+
+## 🏛 Architecture At A Glance
+
+The platform enforces **Perimeter Isolation via Dual Listeners** ([ADR-020](docs/decisions/ADR-020-dual-listener-and-ingress-perimeter.md)). A single `urumi-gateway` Node.js process binds two distinct HTTP sockets:
+- **Port 3001 (Browser Listener):** Serves the compiled React 19 SPA and browser session REST APIs (`/api/v1/browser/*`). Authenticated via Scrypt-hashed passwords, opaque 256-bit session cookies, and dual CSRF/Origin validation.
+- **Port 3000 (MCP & Admin Listener):** Serves the Model Context Protocol over Streamable HTTP (`/mcp`) using constant-time SHA-256 Bearer API keys (`urumi_live_*`), and hosts private admin APIs (`/admin/v1/*`).
 
 ```
+Downstream Clients (User A Browser / User B MCP Inspector)
+                         │
+                         ▼ Ingress (:8080 / :8443)
+┌────────────────────────────────────────────────────────────────────────┐
+│ Kubernetes Cluster (k3d / K3s: namespace urumi)                        │
+│                                                                        │
+│   Traefik Ingress:                                                     │
+│   • shop.127.0.0.1.nip.io:8080      ──> urumi-wordpress:80 (Store)     │
+│   • dashboard.127.0.0.1.nip.io:8080 ──> urumi-gateway:3001 (Port 3001) │
+│   • dashboard...nip.io:8080/mcp     ──> urumi-gateway:3000 (Port 3000) │
+│                                                                        │
+│   ┌────────────────────────────────────────────────────────────────┐   │
+│   │ urumi-gateway Pod (Single Replica Deployment)                  │   │
+│   │                                                                │   │
+│   │   [Port 3001] Browser Listener (React 19 SPA + Session API)    │   │
+│   │   [Port 3000] MCP Listener (Streamable HTTP /mcp + /admin/v1)  │   │
+│   │                                                                │   │
+│   │   Gateway Core Engine:                                         │   │
+│   │   • ToolRouter (20 Global / 4 Upstream Concurrency Pool)       │   │
+│   │   • Dynamic CatalogService ({server}__{tool} Namespacing)      │   │
+│   │   • Bounded Agent Loop (5 Iterations, 30s Deadline, 64KB Cap)  │   │
+│   │   • Confirmation Engine (HMAC-SHA256 Token, 60s TTL)           │   │
+│   │   • Two-Phase Audit Interceptor (Duration, SHA-256 Args Hash)  │   │
+│   │                                                                │   │
+│   │   Persistent Volume: /data/gateway.db                          │   │
+│   │   (Node.js 24 node:sqlite in WAL mode on 500 MiB PVC)          │   │
+│   └───────────────┬────────────────────────────┬───────────────────┘   │
+│                   │ ClusterIP (:3000)          │ ClusterIP (:3000)     │
+│                   ▼                            ▼                       │
+│   ┌───────────────────────────────┐    ┌───────────────────────────┐   │
+│   │ urumi-woocommerce-mcp (:3000) │    │ CRM & Tasks MCP (:3000)   │   │
+│   │ • Custom TypeScript Server    │    │ • urumi-mcp-crm (2 tools) │   │
+│   │ • 5 Approved Tools            │    │ • urumi-mcp-tasks (3 tools│   │
+│   │ • readOnlyRootFilesystem      │    │ • No ServiceAccount token │   │
+│   └───────────────┬───────────────┘    └───────────────────────────┘   │
+│                   │ OAuth 1.0a HMAC-SHA256 (:80)                       │
+│                   ▼                                                    │
+│   ┌───────────────────────────────┐                                    │
+│   │ urumi-wordpress Pod (:80)     │  NetworkPolicy Isolation:          │
+│   │ + MariaDB StatefulSet (:3306) │  Gateway cannot connect directly   │
+│   │ (Stateful PVCs: 1GiB + 1GiB)  │  to WordPress (80) or MariaDB(3306)│
+│   └───────────────────────────────┘                                    │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+For complete architecture diagrams, data models, and decision logs, see [`docs/architecture.md`](docs/architecture.md) and [`docs/decisions/`](docs/decisions/).
+
+---
+
+## 📦 Monorepo Structure
+
+The project is structured as an npm monorepo with pinned **Node.js 24 LTS (`v24.20.0`)** and strict TypeScript:
+
+```
+urumi-platform/
 ├── apps/
-│   ├── dashboard/            # (Phase 5 Verified) React 19 + Vite 6 Dashboard SPA
-│   ├── gateway/              # (Phase 5 Verified) Team MCP Gateway Backend & Dual-Listener Host
-│   ├── woocommerce-mcp/      # (Phase 3 Verified) Custom WooCommerce MCP Server
-│   ├── mcp-crm/              # (Phase 4 Verified) Internal CRM Upstream MCP Server
-│   └── mcp-tasks/            # (Phase 4 Verified) Internal Tasks Upstream MCP Server
+│   ├── dashboard/            # React 19 + Vite 6 Dashboard SPA (dark glassmorphic UI)
+│   ├── gateway/              # Central Team MCP Gateway, dual HTTP listeners & agent engine
+│   ├── woocommerce-mcp/      # Custom TypeScript MCP server with RFC 5849 OAuth 1.0a signer
+│   ├── mcp-crm/              # Synthetic CRM upstream microservice (search_contacts, get_contact)
+│   └── mcp-tasks/            # In-memory Tasks upstream microservice (list/create/update tasks)
 ├── packages/
-│   └── shared/               # Shared TypeScript schemas, types, and utilities
+│   └── shared/               # Shared TypeScript schemas, DTOs, and type definitions
 ├── infra/
 │   └── helm/
-│       └── urumi-platform/   # Unified Helm chart
-│           ├── Chart.yaml
-│           ├── values.yaml
-│           ├── values-local.yaml  # k3d / nip.io on port 8080
-│           ├── values-prod.yaml   # Production VPS on port 443
-│           └── templates/
-├── spikes/
-│   └── mcp-echo/             # Standalone MCP Streamable HTTP protocol spike
-├── docs/
-│   ├── architecture.md       # 4-layer architecture, dual-listener & storage models
-│   ├── requirements-traceability.md # Complete requirements matrix & DoD test plan
-│   ├── decisions/            # Architecture Decision Records (ADRs 001–020)
-│   ├── phase-1/              # Phase 1 audit & verification reports
-│   ├── phase-2/              # Phase 2 store deployment runbooks
-│   ├── phase-3/              # Phase 3 MCP contracts, runbooks & completion reports
-│   ├── phase-4/              # Phase 4 execution logs, recovery & acceptance runbooks
-│   └── phase-5/              # Phase 5 operational runbooks, demo scripts & completion reports
-├── documentation/            # Comprehensive multi-phase study & technical reference manuals
-│   ├── phase 1/
-│   ├── phase 2/
-│   ├── phase 3/
-│   ├── phase 4/              # Phase 4 Study Material & Technical Context Reference
-│   └── phase 5/              # Phase 5 Study Material & Technical Context Reference
+│       └── urumi-platform/   # Unified Helm chart deploying all 6 workloads
+│           ├── values-local.yaml  # Local k3d configuration (nip.io, port 8080, HTTP)
+│           ├── values-prod.yaml   # Production VPS configuration (TLS, Let's Encrypt, Port 443)
+│           └── templates/         # Deployments, StatefulSet, Services, Ingress, NetworkPolicies
+├── docs/                     # Comprehensive architecture, ADRs, test plans, and phase reports
+│   ├── architecture.md       # Detailed 4-layer system design and storage models
+│   ├── requirements-traceability.md # Granular requirements traceability matrix (Categories A–H)
+│   ├── decisions/            # 21 Architecture Decision Records (ADRs 001–021)
+│   ├── phase-6/              # Phase 6 AI agent and external MCP acceptance reports
+│   ├── phase-7/              # Phase 7 hardening, recovery, and regression reports
+│   └── phase-8/              # Final demo scripts, cue sheets, drawing guides, and interview prep
+├── scripts/                  # Automated store provisioning and verification scripts
 ├── package.json              # npm workspaces root
 └── tsconfig.base.json        # Base TypeScript compiler configuration
 ```
 
 ---
 
-## Reproducible Setup & Verification Guide
+## 🚀 Local Setup Instructions (k3d / K3s)
 
 ### 1. Prerequisites
-Ensure the following tools are available on your system:
-- **Node.js**: `v24.x` (recommended via `nvm`)
-- **Docker**: Engine 20.10+ (daemon running)
+Ensure the following tools are installed on your host system:
+- **Node.js**: `v24.x` (enforced via `.nvmrc`)
+- **Docker**: Engine 20.10+
 - **kubectl**: `v1.30+`
 - **helm**: `v3.14+`
 - **k3d**: `v5.x`
 
-If you are using NVM, switch to the pinned Node version:
+Switch to Node 24:
 ```bash
-nvm use
-# Output: Found '/path/to/.nvmrc' with version <24>
+nvm use || nvm install 24
 ```
 
-### 2. Install Workspace Dependencies & Build
-Install root and workspace dependencies from the committed lockfile and compile the shared TypeScript packages:
+### 2. Install Dependencies & Build Packages
 ```bash
 npm ci
 npm run build
 ```
 
-### 3. Run the MCP Streamable HTTP Protocol Spike
-The protocol spike verifies Streamable HTTP tool discovery, tool execution, and Bearer token authentication without hardcoded secrets. As a standalone technical spike, install its pinned dependencies from its committed lockfile and compile:
-
-```bash
-cd spikes/mcp-echo
-npm ci
-npm run build
-
-# Start the spike server with a dynamic test key in the background
-export MCP_SPIKE_API_KEY="test-spike-token-$(date +%s)"
-export PORT=7788
-export HOST="127.0.0.1"
-
-node dist/server.js &
-SERVER_PID=$!
-
-# Run the test client against the live server (uses MCP_SERVER_URL)
-export MCP_SERVER_URL="http://127.0.0.1:7788/mcp"
-export MCP_SPIKE_API_KEY="$MCP_SPIKE_API_KEY"
-
-node dist/test-client.js
-
-# Clean up server
-kill $SERVER_PID
-```
-**Expected Outcome**: 4/4 tests pass (Authentication 401 barrier on missing and invalid keys, Streamable HTTP handshake, Tool discovery, Tool execution).
-
-### 4. Validate the Helm Packaging
-Validate chart syntax and template generation for both local and production profiles:
-```bash
-# Add ~/.local/bin to PATH if helm was installed locally
-export PATH="$HOME/.local/bin:$PATH"
-
-# Lint the Helm chart
-helm lint infra/helm/urumi-platform
-
-# Render templates for local k3d development (nip.io, port 8080)
-helm template test-local infra/helm/urumi-platform -f infra/helm/urumi-platform/values-local.yaml
-
-# Render templates for production VPS (port 443)
-helm template test-prod infra/helm/urumi-platform -f infra/helm/urumi-platform/values-prod.yaml
-```
-**Expected Outcome**: 0 lint errors; templates render valid Kubernetes manifests.
-
-### 5. Provision Local Cluster & Secrets (Phase 2)
-Create the local k3d cluster with pinned K3s version matching host `kubectl v1.37.1` (0 minor version skew):
+### 3. Provision the Local Kubernetes Cluster
+Create the `k3d-urumi` cluster pinning K3s to match client tools with port mappings for Traefik Ingress:
 ```bash
 k3d cluster create urumi \
   --image rancher/k3s:v1.37.1-k3s1 \
@@ -214,7 +177,8 @@ k3d cluster create urumi \
   --timeout 180s
 ```
 
-Generate secure database credentials into a gitignored, mode-0600 file and create the Kubernetes Secret:
+### 4. Create Secrets & Namespace
+Generate secure credentials into a gitignored, mode-0600 file and apply the Kubernetes Secrets:
 ```bash
 mkdir -p .secrets && chmod 700 .secrets
 cat <<EOF > .secrets/phase2-store.env
@@ -223,14 +187,21 @@ mariadb-password=$(openssl rand -hex 16)
 EOF
 chmod 600 .secrets/phase2-store.env
 
-kubectl --context k3d-urumi create namespace urumi --dry-run=client -o yaml | kubectl --context k3d-urumi apply -f -
+kubectl --context k3d-urumi create namespace urumi --dry-run=client -o yaml | kubectl apply -f -
 kubectl --context k3d-urumi -n urumi create secret generic urumi-store-secrets \
-  --from-env-file=.secrets/phase2-store.env \
-  --dry-run=client -o yaml | kubectl --context k3d-urumi apply -f -
+  --from-env-file=.secrets/phase2-store.env --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### 6. Deploy Stateful WooCommerce Store via Helm
-Deploy the store workloads (MariaDB StatefulSet, WordPress Deployment, PVCs, Services, Ingress):
+*(Optional for live AI chat)*: If you want to use the live Gemini chat provider, add your API key:
+```bash
+echo "GEMINI_API_KEY=your_actual_key_here" > .secrets/gemini.env
+kubectl --context k3d-urumi -n urumi create secret generic urumi-gemini-secret \
+  --from-env-file=.secrets/gemini.env --dry-run=client -o yaml | kubectl apply -f -
+```
+*(If omitted, the platform runs in hermetic test mode with full mock provider capabilities).*
+
+### 5. Deploy Unified Helm Chart
+Deploy the entire platform (WordPress, MariaDB, Gateway, WooCommerce MCP, CRM MCP, Tasks MCP, PVCs, Ingress, and NetworkPolicies) with a single command:
 ```bash
 helm --kube-context k3d-urumi upgrade --install urumi-store \
   infra/helm/urumi-platform \
@@ -238,194 +209,275 @@ helm --kube-context k3d-urumi upgrade --install urumi-store \
   --create-namespace \
   -f infra/helm/urumi-platform/values-local.yaml
 
-# Wait for pods and PVCs to be ready
+# Wait for workloads to reach 1/1 Ready
 kubectl --context k3d-urumi -n urumi rollout status statefulset/urumi-mariadb
 kubectl --context k3d-urumi -n urumi rollout status deployment/urumi-wordpress
+kubectl --context k3d-urumi -n urumi rollout status deployment/urumi-gateway
 ```
 
-### 7. Run Deterministic Store Bootstrap
-Run the automated bootstrap script to initialize WordPress, WooCommerce, shipping, products, and API secrets idempotently:
+### 6. Bootstrap the Store
+Initialize WooCommerce permalinks, currency (INR `₹`), COD gateway, Flat Rate shipping, initial products, and internal API credentials:
 ```bash
 ./scripts/bootstrap-store.sh
 ```
-What this script automates:
-- **WP-CLI Lifecycle**: Provisions WP-CLI into `/usr/local/bin/wp` and caches it on the persistent volume (`/var/www/html/wp-cli.phar`) to survive container replacements.
-- **Store Configuration**: Pretty permalinks (`/%postname%/`), WooCommerce 11.2.1 activation, INR (`₹`) currency, COD payment gateway, and Flat Rate shipping method in Zone 0.
-- **Product Catalog**: Idempotently seeds `Urumi Test Mug` (₹299), `Wireless Mouse Demo` (₹799), and `Notebook Demo` (₹149).
-- **API Secret Lifecycle**: Automatically creates Kubernetes Secret `urumi-woocommerce-api` (`consumer-key` and `consumer-secret`) and synchronizes local `.secrets/phase2-store.env`.
 
-### 8. Access Storefront & Test Order Checkout (COD)
-- **Storefront URL**: [http://shop.127.0.0.1.nip.io:8080/](http://shop.127.0.0.1.nip.io:8080/)
-- **Catalog**: Browse products at `/shop/` (contains seeded items: `Urumi Test Mug`, `Wireless Mouse Demo`, `Notebook Demo`).
-- **Checkout Flow**: Add any product to cart $\rightarrow$ navigate to `/checkout/` $\rightarrow$ fill test customer details $\rightarrow$ select **Cash on delivery (COD)** $\rightarrow$ Place Order.
-- **Admin Verification**: Inspect orders in WooCommerce Admin at `/wp-admin/edit.php?post_type=shop_order` (verified Order #14 in `processing` status).
-
-### 9. Verify WooCommerce REST API (`/wp-json/wc/v3`)
-Retrieve API consumer credentials from Kubernetes Secret `urumi-woocommerce-api`:
+### 7. Bootstrap the Administrator Account
+Initialize the gateway SQLite database with the default administrator:
 ```bash
-CK=$(kubectl --context k3d-urumi -n urumi get secret urumi-woocommerce-api -o jsonpath='{.data.consumer-key}' | base64 -d)
-CS=$(kubectl --context k3d-urumi -n urumi get secret urumi-woocommerce-api -o jsonpath='{.data.consumer-secret}' | base64 -d)
+npm --prefix apps/gateway run bootstrap:admin
+```
+*(Displays default credentials and confirmation that the admin user was seeded into `/data/gateway.db`).*
 
-# Negative test (expect 401 Unauthorized)
-curl -sS -I http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products
+---
 
-# Authenticated product listing (returns 3 seeded products)
-curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products | jq '.[].name'
+## 🌐 Production / VPS Deployment Guide (K3s)
 
-# Authenticated order listing (returns placed COD order)
-curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/orders | jq '.[].id'
+The platform is designed for zero-drift transition to a production-like VPS running K3s using the **exact same Helm templates**, modified solely via [`infra/helm/urumi-platform/values-prod.yaml`](infra/helm/urumi-platform/values-prod.yaml).
+
+### 1. What Changes in Production (`values-prod.yaml`)
+| Configuration Domain | Local (`values-local.yaml`) | Production (`values-prod.yaml`) |
+|:---|:---|:---|
+| **Domains / DNS** | `*.127.0.0.1.nip.io` | Real registered domains (e.g. `shop.example.com`, `mcp.example.com`) |
+| **Ingress & Ports** | Host Port 8080 (HTTP) | Standard Ports 80 & 443 (HTTP $\rightarrow$ HTTPS redirect) |
+| **TLS Certificates** | Disabled (`tls.enabled: false`) | Enabled via Let's Encrypt / cert-manager ClusterIssuer |
+| **Storage Class** | `local-path` | `local-path` (single node) or cloud provisioner (`gp3`, `standard-rwo`) |
+| **Security Context** | Developer testing rules enabled | Strict read-only root filesystems, non-root execution, zero test pods |
+| **NetworkPolicies** | Allows local test-client probe pods | Strips all test-client ingress rules; enforces strict pod-label matching |
+
+### 2. Deploy to a VPS running K3s
+On a standard Debian/Ubuntu VPS with K3s and cert-manager installed:
+
+```bash
+# 1. Point kubectl to your VPS cluster
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+# 2. Deploy using production values
+helm upgrade --install urumi-store infra/helm/urumi-platform \
+  --namespace urumi \
+  --create-namespace \
+  -f infra/helm/urumi-platform/values-prod.yaml \
+  --set store.domain="shop.yourdomain.com" \
+  --set gateway.domain="mcp.yourdomain.com"
+
+# 3. Verify TLS certificate issuance
+kubectl get certificates -n urumi
 ```
 
-### 10. Verify Pod Restart Durability & Data Persistence
-Verify that pod crashes or rolling replacements cause zero data loss:
+### 3. Upgrades and Rollbacks with Helm
+- **Safe Rolling Upgrade**:
+  ```bash
+  helm upgrade urumi-store infra/helm/urumi-platform -n urumi -f infra/helm/urumi-platform/values-prod.yaml
+  ```
+- **Instant Rollback**: If an upgrade fails health checks:
+  ```bash
+  helm history urumi-store -n urumi
+  helm rollback urumi-store <PREVIOUS_REVISION> -n urumi
+  ```
+
+---
+
+## 🛠 User & Verification Workflows
+
+### 1. Storefront Checkout (Cash on Delivery)
+1. Open the storefront in your browser: [http://shop.127.0.0.1.nip.io:8080/](http://shop.127.0.0.1.nip.io:8080/)
+2. Browse products at `/shop/` (contains seeded items: *Urumi Test Mug* [ID 10], *Wireless Mouse Demo* [ID 11], *Notebook Demo* [ID 12]).
+3. Add any item to the cart and proceed to `/checkout/`.
+4. Enter test billing details, select **Cash on delivery (COD)**, and click **Place Order**.
+5. The order confirms immediately. In WordPress Admin (`/wp-admin/edit.php?post_type=shop_order`), the order is visible as `processing` (verified baseline Order #14 for ₹299.00).
+
+---
+
+### 2. In-Dashboard AI Assistant & Confirmation Engine
+1. Navigate to the Dashboard: [http://dashboard.127.0.0.1.nip.io:8080/](http://dashboard.127.0.0.1.nip.io:8080/)
+2. Sign in as `admin` (or a member user created via **Team Members** tab).
+3. Click on the **AI MCP Assistant** tab in the sidebar.
+4. **Natural-Language Read-Only Query**:
+   - Ask: *"What products are currently available in our WooCommerce store? Please list their names, prices, and stock status."*
+   - Observe real-time execution feedback:
+     - Tool execution badge: `woocommerce__list_products` (green `success` pill with duration in ms).
+     - Expand the badge to inspect canonical arguments (`per_page: 10`) and clean JSON results.
+     - Synthesized response summarizes the three store items.
+5. **State Mutation with Server-Side Confirmation**:
+   - Ask: *"Please create a high-priority task titled 'Warehouse restock audit' assigned to contact CRM-CONT-001 with status in_progress."*
+   - Execution suspends immediately. The gateway mints an HMAC-SHA256 confirmation token (60s TTL).
+   - An interactive confirmation card appears in the chat showing tool name, arguments, and a countdown timer.
+   - Click **Confirm & Execute**: the browser submits the token, the gateway verifies the signature and session actor, and creates the task (`TASK-002`).
+6. **Protected Baseline Records Safeguard**:
+   - Ask: *"Please change the status of Order 14 to cancelled."*
+   - The gateway's safeguard intercepts the request and hard-blocks execution with `MUTATION_TARGET_PROTECTED`. Order #14 remains untouched.
+7. **Audit Trail Verification**:
+   - Click on the **Audit Trail Ledger** tab in the sidebar.
+   - Verify that all preceding chat tool executions are permanently recorded with caller `user_id`, tool name, execution duration, and deterministic SHA-256 argument hash.
+
+---
+
+### 3. External MCP Client & Instant Revocation
+1. Navigate to the **Team API Keys** tab in the Dashboard.
+2. Click **Generate New Key**, enter name `demo-evaluator-key`, and copy the raw key (`urumi_live_...`).
+3. **Connect via Streamable HTTP (Terminal / Inspector)**:
+   Connect any official MCP client or send a JSON-RPC request over curl:
+   ```bash
+   # Discover tools across all 3 upstreams
+   curl -s -H "Host: dashboard.127.0.0.1.nip.io" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -H "Authorization: Bearer <PASTE_KEY>" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+     http://127.0.0.1:8080/mcp | jq '.result.tools[].name'
+   ```
+   **Output**: Exactly 10 tools returned (`crm__*`, `tasks__*`, `woocommerce__*`).
+
+4. **Query Orders without Customer PII**:
+   ```bash
+   curl -s -H "Host: dashboard.127.0.0.1.nip.io" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -H "Authorization: Bearer <PASTE_KEY>" \
+     -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"woocommerce__list_orders","arguments":{"per_page":5}}}' \
+     http://127.0.0.1:8080/mcp | jq .
+   ```
+   **Output**: Returns Order #14 with total `299.00` and line item `Urumi Test Mug`, but with billing addresses, shipping addresses, customer emails, and phone numbers strictly omitted.
+
+5. **Cross-Server Multi-Turn Workflow**:
+   When an external AI client submits the prompt:  
+   *"Who is the procurement contact for Acme Retail Ltd in our CRM, and what pending or in-progress tasks are assigned to them?"*  
+   The model autonomously calls `crm__search_contacts` (Turn 1), resolves contact `CRM-CONT-001` (Alice Smith), calls `tasks__list_tasks` (Turn 2), and synthesizes both responses into a unified answer.
+
+6. **Instant Fail-Closed Key Revocation**:
+   - Return to the Dashboard **Team API Keys** tab and click **Revoke** on `demo-evaluator-key`.
+   - Re-run the exact same curl command in your terminal.
+   - **Output**: Immediate rejection with `HTTP/1.1 401 Unauthorized: {"error":"Unauthorized: Invalid or revoked API key"}`.
+
+---
+
+## 📐 System Design & Trade-Offs Note
+
+### 1. Architecture Choices
+- **Node.js 24 LTS & Embedded SQLite WAL Mode ([ADR-012](docs/decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md)):**  
+  We chose Node 24 standard library `node:sqlite` in WAL mode on a dedicated PVC rather than hosting an external PostgreSQL cluster. This eliminated database pod bloat, avoided network hops for authentication lookups, provided sub-millisecond query latency, and guaranteed atomic transactions.  
+  *Trade-off*: SQLite requires a single writer. The gateway runs a single replica with `strategy: { type: Recreate }`. If the pod is rescheduled, failover takes approximately 30 seconds (tested at 31s in Gate P7-G3). For high-availability multi-replica scaling, the persistence layer would migrate to LiteFS or PostgreSQL.
+- **Perimeter Isolation via Dual Listeners ([ADR-020](docs/decisions/ADR-020-dual-listener-and-ingress-perimeter.md)):**  
+  Binding Port 3001 for browser sessions and Port 3000 for machine MCP Streamable HTTP ensures ambient browser cookies can never bleed into MCP routes, and private administrative endpoints (`/admin/v1/*`) are unreachable from public Ingress.
+- **In-Cluster OAuth 1.0a HMAC-SHA256 ([ADR-007](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md)):**  
+  WooCommerce MCP signs every REST API call to WordPress using RFC 5849 OAuth 1.0a signatures. The consumer secret is used solely to generate HMAC signatures and is never sent over the cluster network.
+
+### 2. Tool Aggregation, Namespacing & Failure Handling
+- **Dynamic Namespacing ({server}__{tool}) ([ADR-016](docs/decisions/ADR-016-upstream-catalog-snapshot-and-health-tracking.md)):**  
+  Every discovered tool is prefixed with its owning upstream slug (e.g. `woocommerce__list_orders`). This completely eliminates naming collisions across independent microservices.
+- **Hierarchical Concurrency & Backpressure ([ADR-015](docs/decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md)):**  
+  A global ceiling of 20 concurrent requests prevents event-loop starvation, while a per-upstream ceiling of 4 active requests with a queue depth of 10 prevents overwhelming upstream PHP-FPM or database workers. Excess traffic fails fast with HTTP 429.
+- **Failure Isolation & Circuit Breakers:**  
+  Every upstream call is bounded by an `AbortController` timeout (default 10s). If an upstream fails repeatedly, its `CircuitBreaker` trips to `OPEN`, immediately returning clear errors without hanging gateway threads. Healthy upstreams continue operating with zero degradation.
+
+### 3. Production Changes (Local vs VPS)
+- **DNS**: `127.0.0.1.nip.io` wildcard DNS is replaced with static A/AAAA records pointing to the VPS public IP.
+- **Ingress & TLS**: Traefik ingress enables cert-manager Let's Encrypt production certificates on port 443 with automatic HTTP $\rightarrow$ HTTPS redirection.
+- **Storage Class**: `local-path` is replaced with cloud persistent block storage (e.g. `gp3`, `standard-rwo`) if deploying to managed cloud Kubernetes.
+- **Secrets**: Plaintext `.env` files are prohibited; credentials are provided via sealed secrets, external secret operators (Vault / AWS Secrets Manager), or CI/CD injection.
+
+---
+
+## 🛡 Threat Model Note
+
+### 1. Shared Upstream Credentials
+- **Risk**: Upstream credentials (e.g. WordPress consumer keys, bearer tokens) are shared across the team.
+- **Mitigation**: Downstream team members authenticate strictly with their own unique API keys or browser sessions. Upstream credentials are held in Kubernetes Secrets in the isolated namespace `urumi-gateway-secrets`, accessible solely by the gateway pod ServiceAccount. Downstream clients never see, provide, or configure upstream secrets.
+
+### 2. Why Client Tokens Are Not Passed Through to Upstream Servers
+- **Risk**: Passing client bearer tokens upstream exposes user identity credentials to untrusted or compromised microservices and violates token audience boundaries.
+- **Mitigation**: The gateway terminates client authentication at the perimeter. It enforces authorization, verifies that the user is active, audits the request, and dispatches the tool call using internal, scoped upstream credentials. Upstream services have zero visibility into client API keys.
+
+### 3. Untrusted Upstreams & Prompt Injection
+- **Risk**: A compromised upstream server could return malicious tool outputs or craft tool descriptions designed to manipulate the LLM into bypassing safety policies (indirect prompt injection).
+- **Mitigation**:
+  1. The gateway bounds all tool outputs to a maximum of **64 KiB**, truncating oversized payloads.
+  2. Tool results are enclosed in structured markdown code fences with a strict security notice instructing the model never to interpret tool output as system instructions.
+  3. All state mutations require an explicit cryptographic confirmation token (HMAC-SHA256, 60s TTL) signed by the server, preventing autonomous unauthorized changes.
+  4. Baseline records (Order #14 and Product IDs 10–12) are hard-blocked at the engine level.
+
+### 4. What One Team Member Can Do to Another
+- **Risk**: A malicious or compromised member account attempting to access other users' audit logs, impersonate members, or manipulate upstreams (IDOR / privilege escalation).
+- **Mitigation**:
+  1. **Strict RBAC Separation**: Members are restricted to tool execution and managing their own API keys. Any attempt by a member to access `/api/v1/browser/members`, `/audit`, or `/upstreams` returns HTTP 403 Forbidden.
+  2. **IDOR Defense on Confirmation Tokens**: Confirmation tokens encode the initiating `userId`. If User B attempts to redeem a confirmation token generated for User A, the gateway rejects the request with `CONFIRMATION_ACTOR_MISMATCH`.
+  3. **Immediate Account Deactivation**: Deactivating a user account immediately invalidates all active browser sessions and revokes all issued API keys fail-closed.
+
+---
+
+## 🌟 Stand-Out Differentiators Implemented
+
+| # | Differentiator | Implementation & Evidence Reference |
+|:---:|:---|:---|
+| **1** | **Production-Like VPS Parity** | Pinned K3s engine, unified Helm chart, zero-drift values separation (`values-local.yaml` vs `values-prod.yaml`), Let's Encrypt TLS annotations. ([ADR-001](docs/decisions/ADR-001-stack-and-deployment.md)) |
+| **2** | **Dual-Listener Perimeter Isolation** | Physical separation of Browser Listener (Port 3001) and MCP Protocol Listener (Port 3000). Private Admin API (`/admin/v1/*`) completely hidden from public Ingress (returns 404). ([ADR-020](docs/decisions/ADR-020-dual-listener-and-ingress-perimeter.md)) |
+| **3** | **Runtime Container Hardening** | `readOnlyRootFilesystem: true` on WooCommerce MCP with writable `/tmp` `emptyDir`; `automountServiceAccountToken: false` on CRM and Tasks MCP; non-root user execution. ([Gate P7-G2 Report](docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md)) |
+| **4** | **In-Cluster OAuth 1.0a HMAC-SHA256** | Custom RFC 5849 OAuth 1.0a signer for WooCommerce REST API. Consumer secrets are never sent over the wire. Zero third-party npm wrappers. ([ADR-007](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md)) |
+| **5** | **Two-Phase Cryptographic Audit Logging** | Start and completion lifecycle logging with exact millisecond duration and deterministic SHA-256 argument fingerprints. Zero plaintext customer PII or credentials persisted. ([ADR-014](docs/decisions/ADR-014-two-phase-audit-logging-and-retention.md)) |
+| **6** | **Server-Side Mutation Confirmation Engine** | HMAC-SHA256 signed confirmation tokens with 60s TTL and single-use nonce for state mutations. Hard-blocked immutable protection for Order #14 and Product IDs 10–12. Approved disposable demo fixture exemption. ([ADR-021](docs/decisions/ADR-021-in-dashboard-chat-agent-and-mutation-confirmation.md)) |
+| **7** | **Strict NetworkPolicy Defense-in-Depth** | K3s `kube-router` default-deny egress policies blocking gateway access to WordPress (80) and MariaDB (3306). Workload ingress restricted to authorized component labels. ([Gate P7-G4 Report](docs/phase-7/p7-g4-networkpolicy-boundary-verification-report.md)) |
+| **8** | **Single-Replica Recovery Verification** | Graceful pod deletion recovers to `1/1 Ready` in 31 seconds. SQLite WAL database verified with `PRAGMA integrity_check` returning `ok`, 0 foreign key violations, and 0 data drift. ([Gate P7-G3 Report](docs/phase-7/p7-g3-pod-replacement-recovery-report.md)) |
+
+---
+
+## 🧪 Automated Testing & Verification Baseline
+
+The repository enforces a comprehensive test suite across unit, protocol, and integration layers using Node 24's native `node:test` runner:
+
+| Monorepo Package | Test Suite Category | Test Count | Pass Rate | Execution Duration |
+|:---|:---|:---:|:---:|:---:|
+| **`apps/gateway`** | Unit Tests (Crypto, Sessions, CSRF, Router, Limiters) | 351 | **100%** (351/351) | ~16.5 s |
+| **`apps/gateway`** | Protocol Tests (Streamable HTTP, Perimeter, Auth) | 62 | **100%** (62/62) | ~18.2 s |
+| **`apps/gateway`** | Local Integration & Concurrency Stress | 8 | **100%** (8/8) | ~1.8 s |
+| **`apps/woocommerce-mcp`** | Unit Tests (OAuth 1.0a Signer, Parameter Validation) | 17 | **100%** (17/17) | ~0.2 s |
+| **`apps/woocommerce-mcp`** | Protocol Tests (MCP Wire Compliance, PII Redaction) | 35 | **100%** (35/35) | ~0.4 s |
+| **`apps/mcp-crm`** | Unit & Protocol Tests (Contact Search, Synthetic Seed) | 26 | **100%** (26/26) | ~0.3 s |
+| **`apps/mcp-tasks`** | Unit & Protocol Tests (Task Store, In-Memory Seed) | 35 | **100%** (35/35) | ~0.3 s |
+| **Total Automated Tests** | **Full Monorepo Regression Suite** | **534** | **100%** (534/534) | **< 40 s** |
+
+### Run Automated Tests
 ```bash
-# Capture PVC baseline UID
-kubectl --context k3d-urumi -n urumi get pvc -o custom-columns=NAME:.metadata.name,UID:.metadata.uid
-
-# Rollout restart store workloads
-kubectl --context k3d-urumi -n urumi rollout restart deployment/urumi-wordpress
-kubectl --context k3d-urumi -n urumi rollout status deployment/urumi-wordpress
-
-kubectl --context k3d-urumi -n urumi rollout restart statefulset/urumi-mariadb
-kubectl --context k3d-urumi -n urumi rollout status statefulset/urumi-mariadb
-
-# Re-verify store data integrity via REST API
-curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/products | jq '.[].name'
-curl -sS -u "$CK:$CS" http://shop.127.0.0.1.nip.io:8080/wp-json/wc/v3/orders | jq '.[].id'
-```
-
-### 11. Verify Custom WooCommerce MCP Server (Phase 3)
-Verify the custom WooCommerce MCP server running inside Kubernetes:
-
-```bash
-# 1. Run full 120-test automated regression suite
-npm run test:unit --workspace=apps/woocommerce-mcp        # 46 unit tests pass
-npm run test:protocol --workspace=apps/woocommerce-mcp    # 35 protocol tests pass
-npm run test:integration --workspace=apps/woocommerce-mcp # 39 live integration tests pass
-
-# 2. Verify in-cluster Streamable HTTP MCP endpoint
-kubectl -n urumi run mcp-probe --rm -it --image=curlimages/curl --restart=Never \
-  --labels="app.kubernetes.io/component=test-client" \
-  -- curl -s http://urumi-woocommerce-mcp:3000/health
-# Expected: {"status":"ok"}
-
-# 3. Inspect live resource usage
-kubectl -n urumi top pod -l app.kubernetes.io/name=woocommerce-mcp
-# Expected: CPU ~1m, Memory ~39Mi
-
-# 4. Confirm zero state drift on protected store data
-kubectl -n urumi exec deployment/urumi-wordpress -- bash -c \
-  "if [ ! -f /usr/local/bin/wp ]; then cp /var/www/html/wp-cli.phar /usr/local/bin/wp && chmod +x /usr/local/bin/wp; fi; \
-   wp wc product list --user=1 --fields=id,name,sku,price,status --allow-root && \
-   wp wc shop_order list --user=1 --fields=id,status,total,currency --allow-root"
-# Expected: Products 10, 11, 12 published; Order #14 processing (₹299.00)
-```
-
-### 12. Verify Team MCP Gateway & Dynamic Upstreams (Phase 4)
-Verify the central Team MCP Gateway aggregating WooCommerce, CRM, and Tasks:
-
-```bash
-# 1. Run full 360-test monorepo regression suite across all workspaces
+# Run all 534 automated tests across all workspaces
 npm test
-# Expected: 360 tests pass, 0 fail (gateway: 218, woocommerce-mcp: 81, mcp-crm: 26, mcp-tasks: 35)
 
-# 2. Run automated empirical performance & resilience benchmark
-npm --workspace=gateway run test:benchmark
-# Expected: p50 latency ~20ms, 0% error rate at standard load, stable memory usage (~54Mi)
-
-# 3. Verify downstream MCP protocol handshake and catalog discovery via Ingress
-curl -s -H "Host: dashboard.127.0.0.1.nip.io" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <ADMIN_OR_MEMBER_KEY>" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-  http://127.0.0.1:8080/mcp | jq '.result.tools[].name'
-# Expected: 10 tools returned (crm__*, tasks__*, woocommerce__*)
-
-# 4. Verify private Admin API perimeter isolation (expect 404 from public Ingress)
-curl -s -o /dev/null -w "%{http_code}\n" \
-  -H "Host: dashboard.127.0.0.1.nip.io" \
-  http://127.0.0.1:8080/admin/v1/upstreams
-# Expected: 404
-
-# 5. Confirm zero state drift on protected store data
-kubectl -n urumi exec deployment/urumi-wordpress -- wp post list \
-  --post_type=product,shop_order --allow-root --fields=ID,post_title,post_status,post_type
-# Expected: Products 10, 11, 12 published; Order #14 processing (₹299.00)
+# Run isolated package suites
+npm run test:unit --workspace=apps/woocommerce-mcp
+npm run test:protocol --workspace=apps/gateway
 ```
 
-### 13. Verify Phase 5 Team Platform & Browser Dashboard
-Verify the Phase 5 React 19 dashboard, Scrypt session authentication, invitations, API keys, and audit logs:
-
+### Build & Typecheck Cleanliness
 ```bash
-# 1. Run full 471+ automated test suite across all monorepo workspaces under Node 24
-export PATH="/home/rathore/.nvm/versions/node/v24.20.0/bin:$PATH"
-npm test
+# Verify TypeScript compilation across all workspaces
+npm run build
 
-# 2. Verify dashboard build and static bundle generation
-npm run --workspace=apps/dashboard build
-
-# 3. Access Live Dashboard Ingress
-# Browser UI: http://dashboard.127.0.0.1.nip.io:8080/
-# Downstream MCP Streamable HTTP: http://dashboard.127.0.0.1.nip.io:8080/mcp
-
-# 4. Execute non-destructive 28/28 live runtime acceptance suite
-npx tsx scratch/test-stage5-acceptance.ts
-# Expected: 28/28 passed (Browser sessions, CSRF, Invitations, RBAC, API keys, Audit API, SQLite WAL, NetworkPolicy)
-
-# 5. Confirm zero state drift on protected store data
-kubectl -n urumi exec deployment/urumi-wordpress -- wp post list \
-  --post_type=product,shop_order --allow-root --fields=ID,post_title,post_status,post_type
-# Expected: Products 10, 11, 12 published; Order #14 processing (₹299.00)
+# Lint Helm charts for local and production profiles
+helm lint infra/helm/urumi-platform -f infra/helm/urumi-platform/values-local.yaml
+helm lint infra/helm/urumi-platform -f infra/helm/urumi-platform/values-prod.yaml
 ```
 
 ---
 
-## Architecture Decision Records (ADRs)
+## 📚 Phase Documentation Index
 
-- [**ADR-001**](docs/decisions/ADR-001-stack-and-deployment.md): Application Stack, Node.js 24 LTS, and Local Kubernetes Strategy
-- [**ADR-002**](docs/decisions/ADR-002-mcp-compatibility.md): MCP SDK `@modelcontextprotocol/sdk@1.32.1`, Streamable HTTP Transport, and Wire Revision `2024-11-05`
-- [**ADR-003**](docs/decisions/ADR-003-secrets-and-access.md): Secrets Management, RBAC Boundaries, and Truthful LLM Cost Analysis
-- [**ADR-004**](docs/decisions/ADR-004-stateful-storage-and-workload-controllers.md): Stateful Storage Architecture and Workload Controller Selection
-- [**ADR-005**](docs/decisions/ADR-005-local-rest-api-security-boundary.md): Local Development REST API Authentication and Security Boundary
-- [**ADR-006**](docs/decisions/ADR-006-image-digest-locking-and-resource-tuning.md): Kubernetes Version Parity, Immutable Image Digest Locking, and Cgroup Memory Budgeting
-- [**ADR-007**](docs/decisions/ADR-007-in-cluster-rest-api-authentication.md): In-Cluster REST API Authentication via RFC 5849 OAuth 1.0a HMAC-SHA256
-- [**ADR-008**](docs/decisions/ADR-008-five-tool-contract-and-pii-redaction.md): Five-Tool Least-Privilege Contract, Bounded Input Validation, and Customer PII Redaction
-- [**ADR-009**](docs/decisions/ADR-009-kubernetes-network-isolation-and-conditional-policies.md): Cluster-Internal Workload Isolation, Non-Root Execution, and Conditional NetworkPolicies
-- [**ADR-010**](docs/decisions/ADR-010-container-image-identity-and-digest-pinning-boundary.md): Container Image Identity, Local CRI Resolution, and Production Immutability Separation
-- [**ADR-011**](docs/decisions/ADR-011-gateway-dual-mcp-proxy-and-transport-lifecycle.md): Gateway Dual MCP Proxy Architecture, Shared Client Multiplexing, and Cancellation Semantics
-- [**ADR-012**](docs/decisions/ADR-012-gateway-persistence-node-sqlite-and-wal.md): Gateway Storage Engine via Node.js Built-in `node:sqlite`, WAL Concurrency, Permissions, and Disaster Recovery (Accepted)
-- [**ADR-013**](docs/decisions/ADR-013-api-key-auth-constant-time-and-admin-bootstrap.md): API Key Format, Verifier Storage, Constant-Time Authentication, and One-Time Administrator Bootstrap
-- [**ADR-014**](docs/decisions/ADR-014-two-phase-audit-logging-and-retention.md): Two-Phase Audit Logging, Failure Safety Invariants, and Retention Policy
-- [**ADR-015**](docs/decisions/ADR-015-concurrency-limits-circuit-breaker-and-resilience.md): Concurrency Bounds, Circuit Breaker State Machine, and Performance Proposals
-- [**ADR-016**](docs/decisions/ADR-016-upstream-catalog-snapshot-and-health-tracking.md): Upstream Tool Namespacing, Dynamic Catalog Snapshotting, and Health Tracking
-- [**ADR-017**](docs/decisions/ADR-017-network-defense-ssrf-allowlist-and-secret-rbac.md): Network Defense Boundaries, SSRF URL Allowlisting, Ingress Scope, and Kubernetes Secret RBAC
-- [**ADR-018**](docs/decisions/ADR-018-upstream-mock-contracts-crm-and-tasks.md): Upstream Mock Services Architecture: Synthetic CRM and In-Memory Tasks Contracts
-- [**ADR-019**](docs/decisions/ADR-019-browser-identity-session-and-csrf.md): Browser Identity, Scrypt Password KDF, Opaque Session Tokens, and Dual-Layer CSRF Protection
-- [**ADR-020**](docs/decisions/ADR-020-dual-listener-and-ingress-perimeter.md): Dual-Listener Architecture and Public Ingress Perimeter Isolation
-
----
-
-## Project Study & Technical Context Manuals
-
-For deep-dive self-study, interview preparation, and end-to-end technical breakdowns, refer to the curated documentation manuals:
-
-- **Phase 5 (Management Platform, Browser Identity, Dual-Listener & Quality Gates 0–7)**:
-  - [**Phase 5 Project Study Material**](documentation/phase%205/Project%20Study%20Material.md): Deep-dive educational textbook explaining simply and thoroughly every technology, Scrypt mathematics, session management, CSRF defense, dual listeners, gotchas, and 15 interview preparation Q&As.
-  - [**Phase 5 Technical Context Material**](documentation/phase%205/Technical%20Context%20Material.md): Concrete technical reference detailing monorepo inventory, 8-table SQLite schema, REST API contracts, Kubernetes workload manifests, and reproduction guide.
-- **Phase 4 (Team MCP Gateway Core, Dynamic Tool Catalog & Resilience)**:
-  - [**Phase 4 Project Study Material**](documentation/phase%204/Project%20Study%20Material.md): In-depth conceptual guide covering MCP Streamable HTTP, WAL persistence, constant-time crypto, and upstream microservices.
-  - [**Phase 4 Technical Context Material**](documentation/phase%204/Technical%20Context%20Material.md): Concrete technical breakdown and reproduction reference for Phase 4.
+- **Phase 8 (Final Demonstration & Evaluation Package)**:
+  - [**demo-video-master-script.md**](docs/phase-8/demo-video-master-script.md): Full word-for-word spoken script with exact screen cues across all 12 sections.
+  - [**demo-architecture-drawing-guide.md**](docs/phase-8/demo-architecture-drawing-guide.md): 13-step draw.io live drawing sequence, Mermaid blueprints, and request traces.
+  - [**demo-video-recording-cue-sheet.md**](docs/phase-8/demo-video-recording-cue-sheet.md): Compact presenter cheat sheet mapping time codes, actions, and evidence.
+  - [**demo-video-preflight-checklist.md**](docs/phase-8/demo-video-preflight-checklist.md): 15-point verification checklist and rapid recovery runbooks.
+  - [**demo-interview-preparation.md**](docs/phase-8/demo-interview-preparation.md): 22 deep-dive technical interview questions and answers for Round 2.
+- **Phase 7 (Hardening, Resilience & Qualification)**:
+  - [**p7-g2-deployment-and-runtime-verification-report.md**](docs/phase-7/p7-g2-deployment-and-runtime-verification-report.md): Read-only rootfs, `/tmp` emptyDir, and token isolation.
+  - [**p7-g3-pod-replacement-recovery-report.md**](docs/phase-7/p7-g3-pod-replacement-recovery-report.md): Single-replica pod replacement recovery and SQLite persistence verification.
+  - [**p7-g4-networkpolicy-boundary-verification-report.md**](docs/phase-7/p7-g4-networkpolicy-boundary-verification-report.md): Empirical proof of allowed and denied network paths.
+  - [**p7-g5-regression-qualification-report.md**](docs/phase-7/p7-g5-regression-qualification-report.md): 534/534 automated regression qualification.
+  - [**p7-g6-final-acceptance-and-handoff-report.md**](docs/phase-7/p7-g6-final-acceptance-and-handoff-report.md): Phase 7 formal handoff and acceptance matrix.
+- **Phase 6 (AI Agent Loop & External MCP Client)**:
+  - [**p6-demo-runbook.md**](docs/phase-6/p6-demo-runbook.md): Repeatable 10-step evaluator demonstration protocol.
+  - [**p6-g4-external-mcp-acceptance-report.md**](docs/phase-6/p6-g4-external-mcp-acceptance-report.md): Official MCP client acceptance and cross-server workflow.
+  - [**p6-operational-and-user-guide.md**](docs/phase-6/p6-operational-and-user-guide.md): Comprehensive platform operations guide.
+- **Historical Technical Context & Development Manuals**:
+  - [**GLOBAL_README.md**](GLOBAL_README.md): Historical monorepo development milestone ledger (Phases 1–6).
+  - [**documentation/phase 5/Project Study Material.md**](documentation/phase%205/Project%20Study%20Material.md): Deep-dive educational textbook explaining Scrypt, CSRF, and dual listeners.
 
 ---
 
-## Next Phase: Phase 6 (In-Dashboard Chat Agent & External MCP Client Integration)
-
-Phase 6 connects downstream consumers to the unified Team MCP Gateway:
-1. **In-Dashboard Chat Agent**: Interactive chat assistant in `apps/dashboard/` executing tools via the MCP Gateway as the logged-in user (`User A`).
-2. **Tool Execution Visibility**: Collapsible tool execution blocks rendering tool names, inputs, and status pills in real time.
-3. **External Client Support**: Official open-source **MCP Inspector** (`@modelcontextprotocol/inspector`), Claude Code, or Cursor connecting to `http://dashboard.127.0.0.1.nip.io:8080/mcp` using `User B`'s API key.
-4. **Cross-Server Workflows**: Composite user prompts requiring tools from multiple upstream servers (e.g., WooCommerce + Tasks) executed in a single tool loop.
-
-
-
+*Submitted for Round 1 Technical Evaluation — Urumi AI FDE Internship.*
